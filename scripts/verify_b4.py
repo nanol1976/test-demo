@@ -207,7 +207,7 @@ with TestClient(app) as client:
     methods = {m.upper() for p in spec["paths"].values() for m in p}
     check("无 DELETE / PUT / PATCH", not any(x in methods for x in ("DELETE", "PUT", "PATCH")),
           str(sorted(methods)))
-    check("接口总数 9", len(spec["paths"]) == 9, str(sorted(spec["paths"])))
+    check("接口总数 10（Batch13 加 /api/workers）", len(spec["paths"]) == 10, str(sorted(spec["paths"])))
     check("commands 有暂停指令说明", "master:pause" in str(spec["paths"]["/api/commands"]), "")
 
 print()

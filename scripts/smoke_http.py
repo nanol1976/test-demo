@@ -123,7 +123,7 @@ def main() -> int:
         check("openapi 可读", code == 200, f"status={code}")
         paths = list(json.loads(body)["paths"].keys()) if code == 200 else []
         methods = {m.upper() for ms in json.loads(body)["paths"].values() for m in ms} if code == 200 else set()
-        check("接口数 9", len(paths) == 9, f"paths={paths}")
+        check("接口数 10", len(paths) == 10, f"paths={paths}")
         check("方法只有 GET/POST", methods == {"GET", "POST"}, str(sorted(methods)))
 
         print("  --- 投一条探针报文 ---")

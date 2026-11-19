@@ -9,6 +9,37 @@ class Base(DeclarativeBase):
     pass
 
 
+class WorkerRegistry(Base):
+    """执行方注册表（Batch13）。
+
+    解决 Batch12 在线视图的盲区：没有任务的 Worker 在台账里一行都没有，
+    看起来像"消失了"。这里让 Worker 无论忙闲都周期上报，平台自己维护在线状态。
+
+    只 upsert + 读，不做删除（台账铁律同样适用于这张表）。
+    """
+
+    __tablename__ = "worker_registry"
+
+    worker_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    concurrency: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    limit: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    in_flight: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    handled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    meta: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('running', 'stopping', 'stopped')",
+            name="ck_worker_registry_status",
+        ),
+        Index("ix_worker_registry_last_seen", "last_seen"),
+    )
+
+
 class PipelineLedger(Base):
     __tablename__ = "pipeline_ledger"
 

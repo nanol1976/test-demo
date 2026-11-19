@@ -97,6 +97,10 @@ class PlatformClient:
     def post_message(self, envelope: dict):
         return self._request("POST", "/api/messages", envelope)
 
+    def report_worker(self, beat: dict):
+        """Batch13：执行方注册表上报（忙闲都发，空转也能被看见）。"""
+        return self._request("POST", "/api/workers", beat)
+
 
 def envelope(trace_id: str, task_id: str, msg_type: str, sender: str, payload: dict) -> dict:
     """协议 v1.0 通用 6 字段 + payload。timestamp 必须 aware。"""
@@ -166,11 +170,37 @@ class Heartbeat(threading.Thread):
         self._stop.set()
 
 
+class Registry(threading.Thread):
+    """周期上报"我还在 + 现在什么状态"（Batch13）。
+
+    跟任务心跳的区别：心跳是"某个任务还在跑"，注册表是"这个进程还活着"。
+    空转的 Worker 没有任务可心跳，但照样会注册——这就是 Batch12 在线视图的盲区。
+    """
+
+    def __init__(self, agent: "WorkerAgent", interval: float):
+        super().__init__(daemon=True)
+        self.agent = agent
+        self.interval = max(1.0, float(interval))
+        self._stop = threading.Event()
+        self.sent = 0
+
+    def run(self):
+        self.agent.report("running")
+        self.sent += 1
+        while not self._stop.wait(self.interval):
+            self.agent.report("running")
+            self.sent += 1
+
+    def stop(self):
+        self._stop.set()
+
+
 class WorkerAgent:
     def __init__(self, client: PlatformClient, worker_id: str, allow_roots,
                  work_dir: str, heartbeat_interval: float, max_task_seconds: float,
                  state_file: str = "", concurrency: int = 1, status_file: str = "",
-                 min_concurrency: int = 1):
+                 min_concurrency: int = 1, registry_interval: float = 15.0,
+                 register: bool = True):
         if worker_id not in ALLOWED_SENDERS:
             raise SystemExit(f"--worker-id 必须是 {ALLOWED_SENDERS} 之一（sender 就是执行方身份）")
         self.client = client
@@ -184,6 +214,11 @@ class WorkerAgent:
         # 弹性并发：min 是下限（至少同时跑几个），concurrency 是上限
         self.concurrency = max(1, int(concurrency))
         self.min_concurrency = max(1, min(int(min_concurrency), self.concurrency))
+        # Batch13：注册表上报
+        self.registry_interval = max(1.0, float(registry_interval))
+        self.register = bool(register)
+        self._live = {"in_flight": 0, "limit": 1, "handled": 0}
+        self._register_404_logged = False
         self.done = self._load_state()
         # 优雅退出：收到 SIGTERM/SIGINT 后不再拉新活，等在跑的任务收尾再退
         self._stop_requested = threading.Event()
@@ -206,8 +241,38 @@ class WorkerAgent:
             json.dump({"done": sorted(self.done), "updated_at": now_iso()}, fh, ensure_ascii=False)
         os.replace(tmp, self.state_file)
 
+    def report(self, status: str) -> None:
+        """上报注册表。平台老版本没有 /api/workers（404）时只提醒一次，不中断干活。"""
+        if not self.register:
+            return
+        beat = {
+            "worker_id": self.worker_id,
+            "status": status,
+            "concurrency": self.concurrency,
+            "limit": int(self._live.get("limit", 1)),
+            "in_flight": int(self._live.get("in_flight", 0)),
+            "handled": int(self._live.get("handled", 0)),
+            "meta": {"min_concurrency": self.min_concurrency, "pid": os.getpid()},
+        }
+        try:
+            code, body = self.client.report_worker(beat)
+        except (urllib.error.URLError, OSError) as exc:
+            log("registry_failed", status=status, error=str(exc))
+            return
+        if code == 404:
+            if not self._register_404_logged:
+                self._register_404_logged = True
+                log("registry_unsupported", note="平台没有 /api/workers，跳过注册（不影响干活）")
+            return
+        if code not in (200, 202):
+            log("registry_failed", status=status, http=code, body=body)
+
     def _write_status(self, **fields) -> None:
         """守护进程/运维要看的那点信息，落一个小 JSON 文件（不占接口、不进台账）。"""
+        # Batch13：注册表上报要用同一份快照，先更新再决定要不要落盘
+        for key in ("in_flight", "limit", "handled"):
+            if key in fields:
+                self._live[key] = fields[key]
         if not self.status_file:
             return
         try:
@@ -370,6 +435,11 @@ class WorkerAgent:
             except (ValueError, OSError):  # 非主线程/平台不支持时忽略
                 pass
 
+        registry = None
+        if self.register:
+            registry = Registry(self, self.registry_interval)
+            registry.start()
+
         executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=self.concurrency, thread_name_prefix="mw-task"
         )
@@ -396,6 +466,9 @@ class WorkerAgent:
                 stopping = self._stop_requested.is_set()
                 if stopping:
                     log("stopping", inflight=len(inflight))
+                    if registry:
+                        registry.stop()
+                        self.report("stopping")
                     _drain(grace_seconds)
                     return 0
 
@@ -465,6 +538,9 @@ class WorkerAgent:
                     continue
                 time.sleep(min(poll_interval, 0.5))
         finally:
+            if registry:
+                registry.stop()
+                self.report("stopped")
             executor.shutdown(wait=False)
 
     @staticmethod
@@ -492,6 +568,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="弹性并发的下限：至少同时跑几个（默认 1；积压多时会自动涨到 --concurrency 上限）")
     p.add_argument("--grace-seconds", type=float, default=30.0, help="收到停止信号后等在跑任务收尾的秒数")
     p.add_argument("--status-file", default="", help="运行时状态 JSON 落盘路径（守护与运维用）")
+    p.add_argument("--registry-interval", type=float, default=15.0,
+                   help="执行方注册表上报间隔秒（Batch13；忙闲都报，空转也能被看见）")
+    p.add_argument("--no-register", action="store_true",
+                   help="不上报注册表（平台没有 /api/workers 或不想被记录时用）")
     return p
 
 
@@ -509,6 +589,8 @@ def main(argv=None) -> int:
         concurrency=args.concurrency,
         status_file=args.status_file,
         min_concurrency=args.min_concurrency,
+        registry_interval=args.registry_interval,
+        register=not args.no_register,
     )
     log("worker_start", worker_id=args.worker_id, base_url=args.base_url,
         allow_roots=allow_roots, work_dir=args.work_dir)

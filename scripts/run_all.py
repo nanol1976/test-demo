@@ -28,6 +28,7 @@ SCRIPTS = [
     ("Batch10 越权强校验/重放拦截", "verify_b10.py"),
     ("Batch11 Worker 并发/优先级/优雅退出/守护模板", "verify_b11.py"),
     ("Batch12 执行方在线视图/弹性并发", "verify_b12.py"),
+    ("Batch13 执行方注册表/精确在线", "verify_b13.py"),
 ]
 
 

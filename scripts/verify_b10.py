@@ -203,7 +203,7 @@ def main() -> int:
 
         print("=== H 接口面与台账铁律 ===")
         spec = client.get("/openapi.json").json()
-        check("接口数仍为 9", len(spec["paths"]) == 9, str(len(spec["paths"])))
+        check("接口数 10（Batch13 加 /api/workers）", len(spec["paths"]) == 10, str(len(spec["paths"])))
         check("方法只有 GET/POST",
               {m for p in spec["paths"].values() for m in p} <= {"get", "post"},
               str({m for p in spec["paths"].values() for m in p}))

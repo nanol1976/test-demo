@@ -70,7 +70,11 @@ python worker/agent_worker.py --base-url http://127.0.0.1:8000 --worker-id workb
 
 `payload.priority`（数字，越大越先）由 Worker 本地排序，平台只搬运不排序。
 
-并发是**弹性**的：`--concurrency` 是上限，`--min-concurrency`（默认 1）是下限，每轮按积压自适应。看板首屏有「执行方」面板：按任务归属聚合在跑数/待验收数/最近心跳，120 秒内有心跳算「在线」，否则「静默」——平台不单记 Worker，所以接口面仍是 9 个。
+并发是**弹性**的：`--concurrency` 是上限，`--min-concurrency`（默认 1）是下限，每轮按积压自适应。
+
+看板首屏有「执行方」面板：优先读**执行方注册表**（`GET /api/workers`）——Worker 忙闲都每 `--registry-interval`（默认 15s）上报一次，空转也能看见；`running` 且最近上报在心跳超时（默认 120s）内算「在线」，「收尾中/停机」由 Worker 自己报。平台没有该接口时自动退回按任务心跳聚合。
+
+注册表是 Batch13 加的第 10 个接口——这是唯一一次动接口面：Batch12 的在线视图靠任务心跳反推，空转的 Worker 看不见，只能靠注册表补。
 
 Worker 干什么由派发报文的 `payload.exec` 决定（白名单目录内的 `.py` + 参数 + 硬超时）：
 
@@ -83,7 +87,7 @@ Worker 干什么由派发报文的 `payload.exec` 决定（白名单目录内的
 链路：派发 → 任务进 `workbuddy` 队列（「执行中」）→ Worker 轮询拿到 → 执行 → 期间发心跳 → 回执 → 「待验收」→ 台账与看板可查。
 细节见 [docs/base/09-Worker契约.md](docs/base/09-Worker契约.md) 与 [docs/15-Batch9-验收单.md](docs/15-Batch9-验收单.md)。
 
-## 九个接口（只有 GET / POST）
+## 十个接口（只有 GET / POST）
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
@@ -96,6 +100,8 @@ Worker 干什么由派发报文的 `payload.exec` 决定（白名单目录内的
 | GET | `/api/tasks` | 任务分页列表（trace/状态/执行方筛选 + 关键字 + 排序） |
 | GET | `/api/export/{trace_id}` | 导出台账快照（json / csv） |
 | POST | `/api/commands` | 运维指令：pause / resume / clear-breaker |
+| POST | `/api/workers` | 执行方注册/心跳上报（Batch13；忙闲都报，幂等 upsert） |
+| GET | `/api/workers` | 执行方在线列表（`?online=true` 只看活的） |
 
 页面：`GET /`（看板）、`GET /static/*`（静态资源，不参与鉴权）。
 
@@ -131,7 +137,7 @@ python deploy/migrate.py --baseline 2 --force  # 已有版本记录时强制重�
 ## 测试与 CI
 
 ```bash
-python scripts/run_all.py            # 一键：verify_b2/b3/b4/b5/b7/b8/b9/b10/b11/b12 + 真实起服务冒烟
+python scripts/run_all.py            # 一键：verify_b2/b3/b4/b5/b7/b8/b9/b10/b11/b12/b13 + 真实起服务冒烟
 python scripts/run_all.py --no-smoke # 跳过冒烟
 python scripts/ci.py                 # CI 门禁：静态红线 + 迁移三段式 + 全量测试
 python scripts/ci.py --static-only   # 只跑静态门禁（快，本地提交前跑）
@@ -145,13 +151,14 @@ CI 门禁查什么：
 | 依赖齐备 | `requirements.txt` 声明齐全，且每个包真能 `import` |
 | 业务无关 | 代码/迁移里业务词 0 命中（文档里的边界示例不算） |
 | 台账铁律 | 无 `.delete()` / `DELETE FROM` / `drop_table` |
-| 接口面 | 仍为 9 个接口，方法只有 GET/POST |
+| 接口面 | 10 个路径（Batch13 加 `/api/workers`），方法只有 GET/POST |
 | 协议 | 8 种 msg_type 在枚举里、7 状态在 CHECK 里、幂等唯一约束在 |
 | 前端 | 零 CDN、有自动刷新开关、无 setInterval |
 | 前端契约 | 有搜索框/排序下拉、请求带 `q` 与 `sort`、行差量渲染 |
 | JS 语法 | `node --check app/static/app.js`（本机无 node 则跳过并留痕） |
 | 查询契约 | `q` 参数存在、排序走白名单常量、非法排序抛 ValueError |
 | Worker 红线 | Worker 只走 HTTP：不 `import app.*`、不碰 sqlalchemy；无删除调用 |
+| 执行方注册表 | `worker_registry` 模型 + v005 迁移在；GET/POST 同路径；worker_id 白名单；Worker 周期上报与退出上报齐全 |
 | 越权/重放 | `_require_owner` 覆盖 heartbeat/return/reject/abort；`task_abort` 允许 master；派发只允许 master；重放指纹拦截存在且早于状态校验 |
 | 派发载荷 | `task_ledger.dispatch_payload` 列在（否则 Worker 轮询拿到任务也拿不到"干什么"） |
 | 迁移 | 空库 --check 不通过 → upgrade 成功 → --check 通过 → 幂等 |
@@ -236,7 +243,7 @@ worker/         agent_worker.py（真 Worker：轮询/执行/心跳/回执）+ e
 deploy/         run.ps1 / run.sh / migrate.py
 migrations/     runner.py + versions/（版本化增量迁移）
 .github/        workflows/ci.yml（接仓库即可用）
-scripts/        init_db / verify_b2..b12 / run_all / smoke_http / ci
+scripts/        init_db / verify_b2..b13 / run_all / smoke_http / ci
 docs/           Batch 任务卡与验收单
 docs/base/      底座规范（架构·SOP·协议·状态机·契约·故障案例…）
 ```
@@ -257,6 +264,7 @@ docs/base/      底座规范（架构·SOP·协议·状态机·契约·故障案
 | 10 | `--baseline --force` 会清 `schema_version` | 只碰元数据表、需人工显式加参数，但仍属"删"，用前先备份 |
 | 11 | 依赖只在 `requirements.txt` 里声明 | 本地手工装的包一律不算，`ci.py` 第 1.1b 条门禁会拦 |
 | 12 | ~~越权强校验未做~~ | Batch10 已补：`sender` 必须等于 `task.target_worker`（越权 409 且不落归档）；重放按 sender+payload 指纹拦截；派发只允许 Master |
+| 14 | ~~Worker 只在有任务时才被看见~~ | Batch13 已补注册表：空转也上报，`GET /api/workers` 精确在线 |
 | 13 | ~~Worker 单进程串行处理~~ | Batch11 已补：`--concurrency` 并发 + `payload.priority` 优先级 + 三平台守护模板；动态伸缩仍待定 |
 
 ## 台账铁律

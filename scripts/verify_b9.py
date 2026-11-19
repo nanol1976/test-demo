@@ -6,7 +6,7 @@
 3. 断言全部从平台 HTTP 侧读回来，外加核对 Worker 真写出来的产物文件。
 
 覆盖：
-A 治理面：接口仍 9 个、方法只有 GET/POST（Worker 接入不得新增接口）
+A 治理面：接口数 10（Batch13 加了执行方注册表；Batch9 当时是 9）、方法只有 GET/POST
 B 派发：payload.target_worker 生效、载荷原文可回读
 C 真执行：Worker 跑脚本 → 产出文件真实存在 → task_return → 待验收
 D 心跳：执行期间真有 task_heartbeat 落归档（不是补发的）
@@ -216,7 +216,7 @@ def main() -> int:
         code, spec = get(BASE, "/openapi.json")
         paths = list(spec["paths"].keys()) if code == 200 else []
         methods = {m.upper() for p in spec["paths"].values() for m in p} if code == 200 else set()
-        check("接口数仍为 9（Worker 接入未加接口）", len(paths) == 9, f"{len(paths)} 个")
+        check("接口数 10（唯一新增是 Batch13 的 /api/workers）", len(paths) == 10, f"{len(paths)} 个")
         check("方法只有 GET/POST", methods <= {"GET", "POST"}, str(sorted(methods)))
 
         print("=== B 派发：执行方归属与载荷落库 ===")

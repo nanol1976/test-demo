@@ -174,11 +174,14 @@ def stage_static():
         if not fn.endswith(".py"):
             continue
         text = read(os.path.join(api_dir, fn))
-        for m in re.finditer(r"@router\.(get|post|put|delete|patch)\(", text):
+        for m in re.finditer(r"@router\.(get|post|put|delete|patch)\(\s*[\"']([^\"']+)[\"']", text):
             methods.add(m.group(1))
-            routes.append(f"{fn}:{m.group(1)}")
+            routes.append(f"{m.group(2)}")
     check("接口方法只有 GET/POST", methods <= {"get", "post"}, ",".join(sorted(methods)))
-    check("接口数仍为 9", len(routes) == 9, f"{len(routes)} 个：{routes}")
+    # Batch13：9 → 10 个路径（新增 /api/workers 的 GET + POST 共用同一路径）
+    unique_paths = sorted(set(routes))
+    check("接口路径为 10 个（Batch13 加执行方注册表）", len(unique_paths) == 10,
+          f"{len(unique_paths)} 个：{unique_paths}")
 
     # 1.5 协议常量（msg_type 的唯一真源是 schemas 里的 MsgType 枚举）
     schemas_py = read(os.path.join(ROOT, "app", "schemas", "__init__.py"))
@@ -257,10 +260,29 @@ def stage_static():
     js = read(os.path.join(ROOT, "app", "static", "app.js"))
     html = read(os.path.join(ROOT, "app", "static", "index.html"))
     check("看板有执行方视图", "workerTableWrap" in html and "aggregateWorkers" in js)
-    check("执行方视图只用已有接口（没有 /api/workers）",
-          "/api/workers" not in js and "/api/workers" not in html)
+    check("执行方视图优先走注册表（Batch13），仍保留任务聚合兜底",
+          "workers: \"/api/workers\"" in js and "aggregateWorkers" in js)
     check("Worker 有弹性并发下限 --min-concurrency",
           "--min-concurrency" in worker_py, "缺参数")
+
+    # 1.5b4 执行方注册表红线（Batch13）
+    check("注册表模型在（worker_registry）", "class WorkerRegistry" in model_py, "缺模型")
+    check("迁移 v005 存在", os.path.exists(os.path.join(ROOT, "migrations", "versions",
+                                                       "v005_worker_registry.py")))
+    workers_py = os.path.join(ROOT, "app", "api", "routes_workers.py")
+    check("注册表接口文件存在", os.path.exists(workers_py))
+    if os.path.exists(workers_py):
+        wtxt = read(workers_py)
+        check("注册表 GET/POST 同路径 /api/workers",
+              '@router.post("/api/workers"' in wtxt and '@router.get("/api/workers"' in wtxt)
+        check("注册表 worker_id 有白名单校验（不能随便造执行方）",
+              "ALLOWED_WORKERS" in wtxt and "409" in wtxt)
+    check("Worker 会周期上报注册表（忙闲都报）",
+          "report(\"running\")" in worker_py or "self.report(\"running\")" in worker_py)
+    check("Worker 退出时上报 stopping/stopped",
+          '"stopping"' in worker_py and '"stopped"' in worker_py)
+    check("Worker 支持 --registry-interval 与 --no-register",
+          "--registry-interval" in worker_py and "--no-register" in worker_py)
 
     # 1.5c 越权与重放红线（Batch10）：权限校验不能被"顺手删掉"
     dispatch_py = read(os.path.join(ROOT, "app", "services", "dispatch.py"))

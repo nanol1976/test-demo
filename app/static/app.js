@@ -9,6 +9,7 @@ const ROUTES = {
   exportCsv: (t) => `/api/export/${encodeURIComponent(t)}?format=csv`,
   archive: (t) => `/api/archive/${encodeURIComponent(t)}`,
   commands: "/api/commands",
+  workers: "/api/workers",
 };
 
 const STATUS_STYLE = {
@@ -409,7 +410,61 @@ function td(content, cls) {
   return cell;
 }
 
+function workerRegistryState(w) {
+  if (w.status === "stopped") return { label: "停机", cls: "idle" };
+  if (w.status === "stopping") return { label: "收尾中", cls: "warn" };
+  if (w.online) return { label: "在线", cls: "ok" };
+  return { label: "静默", cls: "bad" };
+}
+
+function renderRegistry(workers) {
+  const wrap = el("workerTableWrap");
+  if (!wrap) return;
+  el("workerCount").textContent = workers.length ? `（${workers.filter((w) => w.online).length}/${workers.length} 在线）` : "";
+  if (!workers.length) {
+    wrap.innerHTML = '<div class="empty">还没有 Worker 上报过（启动 Worker 并接入 /api/workers 即可）</div>';
+    return;
+  }
+  const table = document.createElement("table");
+  const head = document.createElement("tr");
+  ["执行方", "状态", "在跑", "并发", "累计完成", "最近上报", "备注"].forEach((h) => {
+    const th = document.createElement("th");
+    th.textContent = h;
+    head.appendChild(th);
+  });
+  table.appendChild(head);
+  workers.forEach((w) => {
+    const tr = document.createElement("tr");
+    tr.appendChild(td(w.worker_id, "mono"));
+    const st = workerRegistryState(w);
+    const stCell = document.createElement("td");
+    const span = document.createElement("span");
+    span.className = "tag " + st.cls;
+    span.textContent = st.label;
+    stCell.appendChild(span);
+    tr.appendChild(stCell);
+    tr.appendChild(td(`${w.in_flight}`));
+    tr.appendChild(td(`${w.limit}/${w.concurrency}`));
+    tr.appendChild(td(String(w.handled)));
+    tr.appendChild(td(new Date(w.last_seen).toLocaleTimeString()));
+    tr.appendChild(td(w.note || "—", "muted"));
+    table.appendChild(tr);
+  });
+  wrap.innerHTML = "";
+  wrap.appendChild(table);
+}
+
 async function loadWorkers() {
+  // Batch13：优先读执行方注册表；平台老版本（没有该接口）时退回按任务聚合。
+  try {
+    const reg = await api(ROUTES.workers);
+    if (reg.ok && Array.isArray(reg.body)) {
+      renderRegistry(reg.body);
+      return;
+    }
+  } catch (e) {
+    /* 落到下面的兜底 */
+  }
   try {
     const r = await api(`${ROUTES.tasks}?page=1&size=${WORKER_VIEW_SIZE}`);
     if (!r.ok) {

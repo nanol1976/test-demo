@@ -9,7 +9,7 @@ from sqlalchemy import inspect
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api import health_router
-from app.api import routes_commands, routes_messages, routes_queries
+from app.api import routes_commands, routes_messages, routes_queries, routes_workers
 from app.api.deps import get_engine, get_session_factory
 from app.bus import MessageBus
 from app.core.config import get_settings
@@ -80,6 +80,7 @@ app.include_router(health_router, prefix="/api", tags=["health"])
 app.include_router(routes_messages.router, prefix="/api", tags=["messages"])
 app.include_router(routes_queries.router, prefix="/api", tags=["ledger"])
 app.include_router(routes_commands.router, prefix="/api", tags=["commands"])
+app.include_router(routes_workers.router, tags=["workers"])
 
 # --- Batch5 极简前端：纯静态资源，不新增任何状态或接口 ---
 STATIC_DIR = Path(__file__).resolve().parent / "static"

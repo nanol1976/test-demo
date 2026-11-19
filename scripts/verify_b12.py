@@ -7,7 +7,7 @@
 覆盖：
 A 迁移 v004：干净库升级到 4，列存在，重复升级幂等
 B 心跳落库：执行期 GET /api/tasks/{id} 能看到 last_heartbeat_time，且随时间前进
-C 在线视图：接口列表里带该字段；看板有"执行方"面板与聚合逻辑；接口数仍 9
+C 在线视图：接口列表里带该字段；看板有"执行方"面板与聚合逻辑；接口数 10（Batch13 起）
 D 弹性并发：积压 4 个任务时并发上限打开（.in_flight 升到 >1），只剩 1 个任务时回落到 1
 """
 import json
@@ -138,9 +138,11 @@ def main() -> int:
     url = f"sqlite:///{DB}"
     proc = run_migrate([], url)
     check("干净库升级成功", proc.returncode == 0, proc.stdout.strip().splitlines()[-1:] and proc.stdout.strip().splitlines()[-1])
-    check("schema_version 到 4", "schema_version：0 → 4" in proc.stdout or "schema_version：4" in proc.stdout,
+    check("schema_version 到 5（Batch13 又加了一张表）",
+          "schema_version：0 → 5" in proc.stdout or "schema_version：5" in proc.stdout,
           proc.stdout.strip().splitlines()[-2:])
-    check("日志显示应用 v004", "应用 v004" in proc.stdout)
+    check("日志显示应用 v004（Batch13 的 v005 紧随其后）",
+          "应用 v004" in proc.stdout)
     import sqlite3
     cols = [r[1] for r in sqlite3.connect(DB).execute("PRAGMA table_info(task_ledger)").fetchall()]
     check("task_ledger 有 last_heartbeat_time 列", "last_heartbeat_time" in cols, str(cols[-3:]))
@@ -220,8 +222,9 @@ def main() -> int:
 
         code, spec = get_json(base, "/openapi.json")
         paths = list((spec or {}).get("paths", {}).keys())
-        check("接口数仍为 9（没有 /api/workers）", len(paths) == 9, f"{len(paths)} 个")
-        check("确实没有新增 workers 接口", all("/workers" not in p for p in paths), str(paths))
+        # 本批做的时候是 9 个（靠任务心跳反推）；Batch13 已把注册表补成第 10 个路径
+        check("接口数 10（Batch13 起含 /api/workers）", len(paths) == 10, f"{len(paths)} 个")
+        check("在线视图数据源可由 /api/workers 承担（注册表已存在）", "/api/workers" in paths, str(paths))
 
         code, html = request("GET", base + "/")
         check("看板首页含「执行方」面板", "执行方" in html and "workerTableWrap" in html)
