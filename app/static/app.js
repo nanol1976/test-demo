@@ -26,10 +26,11 @@ const STATUS_STYLE = {
   执行失败: ["bad"],
 };
 
-const state = { token: "", page: 1, size: 20, pages: 1, total: 0, status: "", trace: null };
+const state = { token: "", page: 1, size: 20, pages: 1, total: 0, status: "", trace: null, autoMs: 0 };
 
 const API_TIMEOUT_MS = 30000;
 const RESULT_MAX_CHARS = 20000;
+const AUTO_KEY = "mwp_auto_refresh_ms";
 
 function el(id) { return document.getElementById(id); }
 
@@ -108,6 +109,7 @@ async function checkHealth() {
 
 function renderPipelines(payload) {
   const wrap = el("pipeTableWrap");
+  const prevScroll = wrap.scrollTop;
   wrap.innerHTML = "";
   const meta = payload.meta || {};
   state.pages = meta.pages || 1;
@@ -146,6 +148,7 @@ function renderPipelines(payload) {
   });
   table.appendChild(tbody);
   wrap.appendChild(table);
+  wrap.scrollTop = prevScroll;
 }
 
 async function loadPipelines() {
@@ -220,8 +223,9 @@ function renderDetail(p) {
   wrap.appendChild(table);
 }
 
-async function loadDetail(traceId) {
-  clearResult("cmdResult");
+async function loadDetail(traceId, opts = {}) {
+  const silent = !!opts.silent;
+  if (!silent) clearResult("cmdResult");
   try {
     const r = await api(ROUTES.pipelineDetail(traceId));
     if (!r.ok) {
@@ -232,10 +236,57 @@ async function loadDetail(traceId) {
       return;
     }
     renderDetail(r.body);
-    loadPipelines();
+    if (!silent) loadPipelines();
   } catch (e) {
     el("taskTableWrap").innerHTML = `<div class="empty">请求异常：${e}</div>`;
   }
+}
+
+/* ---------- 自动刷新 ----------
+   用 setTimeout 逐个排期而不是 setInterval：请求慢时不会堆积。
+   页面隐藏（切到别的标签）时直接跳过，不白白打后端。 */
+let autoTimer = null;
+let refreshing = false;
+
+function markRefreshed() {
+  const node = el("lastRefresh");
+  if (!node) return;
+  node.textContent = "上次刷新 " + new Date().toLocaleTimeString();
+}
+
+async function refreshOnce() {
+  if (document.hidden || refreshing) return;
+  refreshing = true;
+  try {
+    await checkHealth();
+    await loadPipelines();
+    if (state.trace) await loadDetail(state.trace, { silent: true });
+    markRefreshed();
+  } finally {
+    refreshing = false;
+  }
+}
+
+function scheduleAuto() {
+  if (autoTimer) {
+    clearTimeout(autoTimer);
+    autoTimer = null;
+  }
+  if (!state.autoMs) return;
+  autoTimer = setTimeout(async () => {
+    await refreshOnce();
+    scheduleAuto();
+  }, state.autoMs);
+}
+
+function setAutoRefresh(ms) {
+  state.autoMs = Math.max(0, Number(ms) || 0);
+  localStorage.setItem(AUTO_KEY, String(state.autoMs));
+  const sel = el("autoRefresh");
+  if (sel) sel.value = String(state.autoMs);
+  const node = el("lastRefresh");
+  if (node) node.textContent = state.autoMs ? "等待首次自动刷新…" : "自动刷新已关闭";
+  scheduleAuto();
 }
 
 async function sendCommand(command) {
@@ -355,7 +406,14 @@ function bind() {
     checkHealth();
     loadPipelines();
   });
-  el("reloadPipes").addEventListener("click", () => { state.page = 1; loadPipelines(); });
+  el("reloadPipes").addEventListener("click", () => { state.page = 1; loadPipelines().then(markRefreshed); });
+  el("autoRefresh").addEventListener("change", (e) => setAutoRefresh(e.target.value));
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && state.autoMs) {
+      refreshOnce();
+      scheduleAuto();
+    }
+  });
   el("pipeStatus").addEventListener("change", (e) => { state.status = e.target.value; state.page = 1; loadPipelines(); });
   el("pipePrev").addEventListener("click", () => { if (state.page > 1) { state.page -= 1; loadPipelines(); } });
   el("pipeNext").addEventListener("click", () => { if (state.page < state.pages) { state.page += 1; loadPipelines(); } });
@@ -383,3 +441,4 @@ el("tokenInput").value = state.token;
 bind();
 checkHealth();
 loadPipelines();
+setAutoRefresh(localStorage.getItem(AUTO_KEY) || 0);

@@ -19,6 +19,7 @@ SCRIPTS = [
     ("Batch3 查询/导出/鉴权", "verify_b3.py"),
     ("Batch4 超时/熔断/暂停/DAG", "verify_b4.py"),
     ("Batch5 极简前端", "verify_b5.py"),
+    ("Batch7 迁移框架/自动刷新/CI", "verify_b7.py"),
 ]
 
 
