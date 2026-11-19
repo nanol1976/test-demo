@@ -101,7 +101,7 @@ def stage_static():
     print("=" * 60)
 
     # 1.1 语法编译
-    targets = [os.path.join(ROOT, p) for p in ("app", "scripts", "deploy", "migrations")]
+    targets = [os.path.join(ROOT, p) for p in ("app", "scripts", "deploy", "migrations", "worker")]
     tmpdir = tempfile.mkdtemp(prefix="mwp_ci_pyc_")
     bad = []
     total = 0
@@ -148,7 +148,8 @@ def stage_static():
 
     # 1.2 业务词（只扫代码与迁移；docs/base 里出现业务词是刻意的——那是在写"平台不做什么"的边界示例）
     hits = []
-    for path in list(walk_py([os.path.join(ROOT, "app"), os.path.join(ROOT, "migrations")])):
+    for path in list(walk_py([os.path.join(ROOT, "app"), os.path.join(ROOT, "migrations"),
+                              os.path.join(ROOT, "worker")])):
         text = read(path)
         for w in BUSINESS_WORDS:
             if w in text:
@@ -157,7 +158,7 @@ def stage_static():
 
     # 1.3 删除调用
     dels = []
-    for path in walk_py([os.path.join(ROOT, "app")]):
+    for path in walk_py([os.path.join(ROOT, "app"), os.path.join(ROOT, "worker")]):
         text = read(path)
         for pat in DELETE_PATTERNS:
             for m in re.finditer(pat, text):
@@ -193,6 +194,29 @@ def stage_static():
 
     check("幂等唯一约束仍在", "uq_archive_message" in models_py)
     check("pipeline 状态 5 值在 CHECK 里", all(s in models_py for s in ["pending", "running", "success", "aborted", "failed"]))
+
+    # 1.5b Worker 接入红线（Batch9）：执行方只能走 HTTP，不许绕过平台直连底座
+    worker_files = list(walk_py([os.path.join(ROOT, "worker")]))
+    check("Worker 端点存在（worker/agent_worker.py）",
+          any(os.path.basename(p) == "agent_worker.py" for p in worker_files),
+          f"{len(worker_files)} 个 .py")
+    leaks = []
+    for path in worker_files:
+        text = read(path)
+        rel = os.path.relpath(path, ROOT)
+        if re.search(r"^\s*(from\s+app\b|import\s+app\b|from\s+app\.)", text, re.M):
+            leaks.append(f"{rel}:import app")
+        if re.search(r"^\s*(import|from)\s+sqlalchemy", text, re.M):
+            leaks.append(f"{rel}:sqlalchemy")
+        if re.search(r"^\s*(from|import)\s+app\.(models|repositories|services|core)", text, re.M):
+            leaks.append(f"{rel}:直连底座模块")
+    check("Worker 只走 HTTP（不 import app/不碰 sqlalchemy）", not leaks, "; ".join(leaks[:3]))
+
+    # 派发载荷必须落库（否则 Worker 轮询拿到了任务也拿不到"干什么"）
+    check("派发载荷落库（dispatch_payload 列）",
+          "dispatch_payload" in read(os.path.join(ROOT, "migrations", "versions", "v003_task_dispatch_payload.py"))
+          and "dispatch_payload" in models_py,
+          "迁移或模型缺 dispatch_payload")
 
     # 1.6 启动自检仍在（防有人为了"看起来干净"把它删了）
     main_py = read(os.path.join(ROOT, "app", "main.py"))

@@ -47,6 +47,9 @@ class TaskLedger(Base):
     abort_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     log_ref: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     depends_on: Mapped[List[str]] = mapped_column(JSON, nullable=False, default=list)
+    # Batch9：派发报文的载荷（JSON 文本，可空）。
+    # 平台只搬运不解释；Worker 轮询时靠它拿到"要干什么"。
+    dispatch_payload: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     pipeline: Mapped["PipelineLedger"] = relationship("PipelineLedger", back_populates="tasks")
 

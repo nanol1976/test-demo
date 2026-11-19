@@ -1,5 +1,5 @@
 """HTTP 入参/出参模型（Batch2）。字段名与台账列名保持一致。"""
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -23,6 +23,8 @@ class TaskView(BaseModel):
     reject_reason: Optional[str] = None
     abort_reason: Optional[str] = None
     depends_on: List[str] = Field(default_factory=list)
+    # Batch9：派发载荷原文（原样搬运，平台不解释；老数据为 None）
+    payload: Optional[Dict[str, Any]] = None
 
 
 class PipelineView(BaseModel):

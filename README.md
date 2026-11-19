@@ -48,6 +48,26 @@ python deploy/migrate.py            # 版本化迁移到最新（建表 + 记 sc
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
+## 接入一个真 Worker（Batch9）
+
+平台不推任务，Worker 自己轮询取活——只有两条 HTTP，不需要新接口：
+
+```bash
+python worker/agent_worker.py --base-url http://127.0.0.1:8000 --worker-id workbuddy
+# 常驻；加 --once 处理一轮就退出（验收脚本用的就是这模式）
+```
+
+Worker 干什么由派发报文的 `payload.exec` 决定（白名单目录内的 `.py` + 参数 + 硬超时）：
+
+```json
+{"target_worker": "workbuddy", "task_goal": "跑个样例",
+ "exec": {"script": "worker/examples/hello_task.py", "args": ["--label", "demo"],
+          "artifacts": ["artifacts/hello.txt"]}}
+```
+
+链路：派发 → 任务进 `workbuddy` 队列（「执行中」）→ Worker 轮询拿到 → 执行 → 期间发心跳 → 回执 → 「待验收」→ 台账与看板可查。
+细节见 [docs/base/09-Worker契约.md](docs/base/09-Worker契约.md) 与 [docs/15-Batch9-验收单.md](docs/15-Batch9-验收单.md)。
+
 ## 九个接口（只有 GET / POST）
 
 | 方法 | 路径 | 用途 |
@@ -82,7 +102,7 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 python deploy/migrate.py                    # 升级到最新
 python deploy/migrate.py --check            # 只检查（不通过 exit 1）
 python deploy/migrate.py --status           # 每个版本：已应用 / 待应用
-python deploy/migrate.py --to 2             # 只升到 v002
+python deploy/migrate.py --to 2             # 只升到 v002（当前最新 v003）
 python deploy/migrate.py --dry-run          # 只打印将要执行什么
 python deploy/migrate.py --baseline 2       # 接管既有库（表已建好，只补版本记录）
 python deploy/migrate.py --baseline 2 --force  # 已有版本记录时强制重写（慎用）
@@ -96,7 +116,7 @@ python deploy/migrate.py --baseline 2 --force  # 已有版本记录时强制重�
 ## 测试与 CI
 
 ```bash
-python scripts/run_all.py            # 一键：verify_b2/b3/b4/b5/b7/b8 + 真实起服务冒烟
+python scripts/run_all.py            # 一键：verify_b2/b3/b4/b5/b7/b8/b9 + 真实起服务冒烟
 python scripts/run_all.py --no-smoke # 跳过冒烟
 python scripts/ci.py                 # CI 门禁：静态红线 + 迁移三段式 + 全量测试
 python scripts/ci.py --static-only   # 只跑静态门禁（快，本地提交前跑）
@@ -116,6 +136,8 @@ CI 门禁查什么：
 | 前端契约 | 有搜索框/排序下拉、请求带 `q` 与 `sort`、行差量渲染 |
 | JS 语法 | `node --check app/static/app.js`（本机无 node 则跳过并留痕） |
 | 查询契约 | `q` 参数存在、排序走白名单常量、非法排序抛 ValueError |
+| Worker 红线 | Worker 只走 HTTP：不 `import app.*`、不碰 sqlalchemy；无删除调用 |
+| 派发载荷 | `task_ledger.dispatch_payload` 列在（否则 Worker 轮询拿到任务也拿不到"干什么"） |
 | 迁移 | 空库 --check 不通过 → upgrade 成功 → --check 通过 → 幂等 |
 
 怎么把门禁接到仓库（GitHub / Gitee / 内网 GitLab 三种写法、换行符与 BOM 的坑）：见 [docs/14-CI接入指南.md](docs/14-CI接入指南.md)。
@@ -194,10 +216,11 @@ app/
   schemas/      Envelope 与 payload
   services/     dispatch（状态机 + 幂等 + 闸门）/ scheduler（超时·心跳·熔断）/ breaker
   static/       看板（零依赖前端）
+worker/         agent_worker.py（真 Worker：轮询/执行/心跳/回执）+ examples/
 deploy/         run.ps1 / run.sh / migrate.py
 migrations/     runner.py + versions/（版本化增量迁移）
 .github/        workflows/ci.yml（接仓库即可用）
-scripts/        init_db / verify_b2..b7 / run_all / smoke_http / ci
+scripts/        init_db / verify_b2..b9 / run_all / smoke_http / ci
 docs/           Batch 任务卡与验收单
 docs/base/      底座规范（架构·SOP·协议·状态机·契约·故障案例…）
 ```
@@ -217,6 +240,8 @@ docs/base/      底座规范（架构·SOP·协议·状态机·契约·故障案
 | 9 | 关键字搜索是 `LIKE '%q%'` 子串匹配 | 台账到十万级会慢，届时改用检索表或 FTS |
 | 10 | `--baseline --force` 会清 `schema_version` | 只碰元数据表、需人工显式加参数，但仍属"删"，用前先备份 |
 | 11 | 依赖只在 `requirements.txt` 里声明 | 本地手工装的包一律不算，`ci.py` 第 1.1b 条门禁会拦 |
+| 12 | 越权强校验未做（heartbeat/return 的 `sender` 未校验等于 `task.target_worker`） | 目前只校验 trace 同源；伪造他人 task_id 发报文仍可落账（下一批处理） |
+| 13 | Worker 单进程串行处理 | 并发度与优先级需先定调度策略；当前一轮内的任务按列表顺序逐个跑 |
 
 ## 台账铁律
 

@@ -47,6 +47,10 @@ class TaskDispatchPayload(BaseModel):
     task_goal: str = Field(..., min_length=1)
     input: Dict[str, Any] = Field(default_factory=dict)
     output_schema: Optional[Dict[str, Any]] = None
+    # Batch9：派给谁（缺省按派发报文 sender 归属，见 docs/base/09）
+    target_worker: Optional[Literal["master", "dsh", "workbuddy", "codex", "user"]] = None
+    # Batch9：执行规格（Worker 怎么干）。平台只搬运不解释，字段语义见 docs/base/09。
+    exec: Optional[Dict[str, Any]] = None
     # 基线要求：验收项为数组，逐条列出，不是字典
     acceptance_criteria: Optional[List[str]] = None
     depends_on: List[str] = Field(default_factory=list)

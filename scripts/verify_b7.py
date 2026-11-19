@@ -22,6 +22,9 @@ from sqlalchemy import create_engine, inspect, text  # noqa: E402
 
 from migrations import runner  # noqa: E402
 
+# 版本期望跟着迁移目录走，不写死：以后加 v004 不用改这条验收
+LATEST = runner.latest_available()
+
 PY = sys.executable
 FAILS = []
 
@@ -127,7 +130,8 @@ def main():
     code, out = run_cli(args=["--check"])
     check("空库 --check 不通过（exit 1）", code == 1, f"exit={code}")
     check("空库 --check 说明缺表", "缺表" in out)
-    check("空库 --check 列出待应用迁移", "v001" in out and "v002" in out)
+    check("空库 --check 列出待应用迁移",
+          "v001" in out and "v002" in out and f"v{LATEST:03d}" in out)
 
     code, out = run_cli(args=[])
     check("空库 upgrade 成功（exit 0）", code == 0, f"exit={code}")
@@ -143,7 +147,8 @@ def main():
     )
     idx = {i["name"] for i in inspect(eng).get_indexes("message_archive")}
     check("v002 建的索引存在", "ix_message_archive_msg_type" in idx, str(sorted(idx)))
-    check("schema_version 到 2", runner.current_version(eng) == 2, str(runner.current_version(eng)))
+    check(f"schema_version 到最新（v{LATEST:03d}）", runner.current_version(eng) == LATEST,
+          str(runner.current_version(eng)))
 
     code, out = run_cli(args=["--check"])
     check("升级后 --check 通过（exit 0）", code == 0, f"exit={code}")
@@ -152,7 +157,7 @@ def main():
     check("幂等：重复 upgrade 不重复应用", "无待应用迁移" in out, out.strip().splitlines()[-2:])
     with eng.connect() as conn:
         rows = conn.execute(text("SELECT COUNT(1) FROM schema_version")).scalar()
-    check("schema_version 仍只有 2 行", rows == 2, f"rows={rows}")
+    check(f"schema_version 恰好 {LATEST} 行（无重复应用）", rows == LATEST, f"rows={rows}")
 
     # A5 旧库（v1）增量
     url2, path2 = fresh_db("verify_b7_legacy.db")
@@ -172,14 +177,16 @@ def main():
 
     code, out = run_cli([], DATABASE_URL=url2)
     check("旧库 upgrade 成功", code == 0, f"exit={code}")
-    check("旧库只应用增量 v002（不重跑 v001）", "→ 应用 v002" in out and "→ 应用 v001" not in out)
+    check("旧库只应用增量（不重跑 v001）",
+          "→ 应用 v002" in out and "→ 应用 v001" not in out, out.strip().splitlines()[-3:])
     eng2 = create_engine(url2, future=True)
-    check("旧库版本升到 2", runner.current_version(eng2) == 2, str(runner.current_version(eng2)))
+    check(f"旧库版本升到最新（v{LATEST:03d}）", runner.current_version(eng2) == LATEST,
+          str(runner.current_version(eng2)))
     with eng2.connect() as conn:
         keep = conn.execute(text("SELECT applied_at FROM schema_version WHERE version=1")).scalar()
         n = conn.execute(text("SELECT COUNT(1) FROM schema_version")).scalar()
     check("旧库 v001 的应用时间保持不变", keep == old_at, f"{old_at} / {keep}")
-    check("旧库 schema_version 有 2 行", n == 2, f"rows={n}")
+    check(f"旧库 schema_version 有 {LATEST} 行", n == LATEST, f"rows={n}")
 
     # A6 --to / --status
     url3, path3 = fresh_db("verify_b7_to.db")
@@ -188,11 +195,13 @@ def main():
     eng3 = create_engine(url3, future=True)
     check("--to 1 后版本为 1", runner.current_version(eng3) == 1, str(runner.current_version(eng3)))
     code, out = run_cli(["--status"], DATABASE_URL=url3)
-    check("--status 显示 v002 待应用", "待应用" in out and "v002" in out, out.strip().splitlines()[-3:])
+    check("--status 显示后续版本待应用",
+          "待应用" in out and f"v{LATEST:03d}" in out, out.strip().splitlines()[-3:])
     code, out = run_cli(["--check"], DATABASE_URL=url3)
     check("--to 1 后 --check 不通过（版本落后）", code == 1, f"exit={code}")
     code, out = run_cli([], DATABASE_URL=url3)
-    check("继续 upgrade 补齐 v002", code == 0 and runner.current_version(eng3) == 2, out.strip().splitlines()[-2:])
+    check(f"继续 upgrade 补齐到 v{LATEST:03d}", code == 0 and runner.current_version(eng3) == LATEST,
+          out.strip().splitlines()[-2:])
     for e in (eng, eng2, eng3):
         e.dispose()
     for p in (path, path2, path3):

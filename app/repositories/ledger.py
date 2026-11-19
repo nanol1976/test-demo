@@ -277,6 +277,30 @@ class LedgerRepository:
         self.db.refresh(row)
         return row
 
+    def record_dispatch(
+        self,
+        task_id: str,
+        when: datetime,
+        payload_json: Optional[str] = None,
+        target_worker: Optional[str] = None,
+    ) -> Optional[TaskLedger]:
+        """派发落账：dispatch_time + 载荷原文（+ 必要时纠正执行方归属）。
+
+        只更新、不删除。重派时以最新一次派发为准（覆盖 payload 与 dispatch_time），
+        因为 Worker 要按"这一次"的规格执行。
+        """
+        row = self.db.get(TaskLedger, task_id)
+        if row is None:
+            return None
+        row.dispatch_time = when
+        if payload_json is not None:
+            row.dispatch_payload = payload_json
+        if target_worker is not None:
+            row.target_worker = target_worker
+        self.db.commit()
+        self.db.refresh(row)
+        return row
+
     def mark_return_time(self, task_id: str, when: datetime) -> Optional[TaskLedger]:
         row = self.db.get(TaskLedger, task_id)
         if row is None:

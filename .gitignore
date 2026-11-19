@@ -6,3 +6,4 @@ data/*.db
 archive/
 *.log
 .env
+artifacts/

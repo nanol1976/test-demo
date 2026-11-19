@@ -3,6 +3,7 @@
 只有 4 个接口：POST /api/messages + 3 个 GET。
 不提供 DELETE/PUT/PATCH —— 状态只能由报文驱动。
 """
+import json
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -65,6 +66,20 @@ def _consume(envelope: Envelope) -> HandlerResult:
         db.close()
 
 
+def _task_payload(task) -> Optional[Dict[str, Any]]:
+    """派发载荷原文回读。落库是 JSON 文本，坏数据不应让整个查询接口 500，
+    解析失败退化为 None（只影响这一个字段）。"""
+    raw = getattr(task, "dispatch_payload", None)
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        logger.warning("dispatch_payload 解析失败，已忽略：task_id=%s", task.task_id)
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def _task_view(task) -> TaskView:
     return TaskView(
         task_id=task.task_id,
@@ -79,6 +94,7 @@ def _task_view(task) -> TaskView:
         reject_reason=task.reject_reason,
         abort_reason=task.abort_reason,
         depends_on=list(task.depends_on or []),
+        payload=_task_payload(task),
     )
 
 

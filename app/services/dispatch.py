@@ -5,6 +5,7 @@
 - 不做 DAG 拆解、不做验收判定、不做审批决策、不做超时控制；
 - 所有写操作一律走 LedgerRepository，禁止在这里写 SQL 或自建 Session。
 """
+import json
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -16,15 +17,16 @@ from app.bus.router import HandlerResult, Router
 from app.core.logging import get_logger
 from app.models import MessageArchive
 from app.repositories.ledger import PIPELINE_STATUSES, LedgerRepository
-from app.schemas import Envelope, MsgType
+from app.schemas import Envelope, MsgType, Sender
 from app.services import ArchiveService
 
 logger = get_logger(__name__)
 
 # 迁移白名单：msg_type -> 允许的源状态
 TASK_RETURN_FROM = {"执行中"}
-TASK_REJECT_FROM = {"待验收"}
-TASK_DISPATCH_FROM = {"待调度下发"}
+TASK_REJECT_FROM = {"执行中", "待验收"}  # 05 文档：执行中/待验收 均可驳回
+# 05 文档：验收驳回后 Master 可重派（remaining_retry 已在驳回时扣减，重派不再重复扣）
+TASK_DISPATCH_FROM = {"待调度下发", "验收驳回"}
 
 
 class IllegalTransitionError(Exception):
@@ -141,6 +143,32 @@ def _require_dispatch_gate(
         raise IllegalTransitionError(f"task_dispatch 被拒：依赖未满足 {unmet}")
 
 
+def _resolve_target_worker(payload: Dict[str, Any], envelope: Envelope) -> str:
+    """任务归属哪个执行方。
+
+    口径（Batch9 修正）：协议文档示例写的是 `payload.target_worker`，
+    旧实现却取派发报文的 `sender`——Master 派给 workbuddy 的任务会被记成 master，
+    Worker 按自己名字轮询永远查不到。现改为：
+      1) 优先 `payload.target_worker`；
+      2) 缺省回退 `sender`（兼容既有不带该字段的报文）；
+      3) 取值必须属于 5 值白名单，否则拒绝（不落状态）。
+    """
+    raw = payload.get("target_worker")
+    allowed = {s.value for s in Sender}
+    if raw is None or raw == "":
+        return envelope.sender.value
+    if not isinstance(raw, str) or raw not in allowed:
+        raise IllegalTransitionError(
+            f"task_dispatch 被拒：payload.target_worker 不合法（{raw!r}），只接受 {sorted(allowed)}"
+        )
+    return raw
+
+
+def _payload_json(payload: Dict[str, Any]) -> str:
+    """载荷原文落库。平台只搬运不解释，故原样序列化（稳定排序便于比对）。"""
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+
+
 @_idempotent
 def handle_task_dispatch(db: Session, envelope: Envelope) -> HandlerResult:
     payload: Dict[str, Any] = envelope.payload or {}
@@ -154,13 +182,15 @@ def handle_task_dispatch(db: Session, envelope: Envelope) -> HandlerResult:
 
     _require_dispatch_gate(repo, pipeline, payload, envelope)
 
+    target_worker = _resolve_target_worker(payload, envelope)
+
     task = repo.get_task(envelope.task_id)
     if task is None:
         # 首次派发：按报文建任务，落到「待调度下发」后再转执行中
         repo.create_task(
             trace_id=envelope.trace_id,
             task_id=envelope.task_id,
-            target_worker=envelope.sender.value,
+            target_worker=target_worker,
             depends_on=payload.get("depends_on"),
             max_retry=int(payload.get("max_retry", 3)),
             is_high_risk=bool(payload.get("is_high_risk", False)),
@@ -169,6 +199,11 @@ def handle_task_dispatch(db: Session, envelope: Envelope) -> HandlerResult:
         task = repo.get_task(envelope.task_id)
     else:
         _require_status(task, TASK_DISPATCH_FROM, "task_dispatch")
+        if task.status == "验收驳回" and task.remaining_retry <= 0:
+            raise IllegalTransitionError(
+                f"task_dispatch 被拒：任务 {task.task_id} 重试次数已耗尽（remaining_retry=0），"
+                "按 05 状态机应转「执行失败」，需新建任务重来"
+            )
 
     if task.trace_id != envelope.trace_id:
         raise IllegalTransitionError(
@@ -176,7 +211,13 @@ def handle_task_dispatch(db: Session, envelope: Envelope) -> HandlerResult:
         )
 
     archive_id = archive_message(db, envelope)
-    repo.mark_dispatch_time(envelope.task_id, envelope.timestamp)
+    # dispatch_time + 载荷原文 + 执行方归属，一次落账（只更新，不删除）
+    repo.record_dispatch(
+        envelope.task_id,
+        envelope.timestamp,
+        payload_json=_payload_json(payload),
+        target_worker=target_worker,
+    )
     repo.update_task_status(envelope.task_id, "执行中")
     return HandlerResult(archive_id, True, "任务已下发，状态：执行中")
 
@@ -213,8 +254,14 @@ def handle_task_reject(db: Session, envelope: Envelope) -> HandlerResult:
     reason = (envelope.payload or {}).get("reason") or "（未提供驳回原因）"
     archive_id = archive_message(db, envelope)
     repo.record_reject(envelope.task_id, reason)
-    repo.update_task_status(envelope.task_id, "验收驳回")
     remaining = repo.get_task(envelope.task_id).remaining_retry
+    if remaining <= 0:
+        # 05 状态机：验收驳回 → 执行失败（重试次数耗尽）
+        repo.update_task_status(envelope.task_id, "执行失败")
+        return HandlerResult(
+            archive_id, True, f"已驳回且重试次数耗尽（remaining_retry=0），状态转「执行失败」"
+        )
+    repo.update_task_status(envelope.task_id, "验收驳回")
     return HandlerResult(
         archive_id, True, f"已驳回并扣减重试次数，剩余重试 {remaining} 次（重派由 Master 决定）"
     )

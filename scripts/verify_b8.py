@@ -188,12 +188,15 @@ def main():
     Base.metadata.create_all(eng)  # 模拟"表已建好、但没版本记录"的既有库
     eng.dispose()
 
-    code, out = migrate_cli(["--baseline", "2"], url)
+    from migrations import runner as _runner
+    LATEST = _runner.latest_available()
+
+    code, out = migrate_cli(["--baseline", str(LATEST)], url)
     check("baseline 接管成功", code == 0 and "接管" in out, f"exit={code}")
     code, out = migrate_cli(["--check"], url)
     check("接管后 --check 通过", code == 0, f"exit={code}")
 
-    code, out = migrate_cli(["--baseline", "2"], url)
+    code, out = migrate_cli(["--baseline", str(LATEST)], url)
     check("已有版本再接管被拒绝", code == 1 and "拒绝接管" in out, f"exit={code}")
 
     empty_path = os.path.join(ROOT, "data", "verify_b8_empty.db")
@@ -210,7 +213,8 @@ def main():
 
     eng = __import__("sqlalchemy").create_engine(url, future=True)
     check("接管后无待应用迁移", runner.pending(eng) == [], str([m.version for m in runner.pending(eng)]))
-    check("接管记录写进 schema_version", runner.current_version(eng) == 2, str(runner.current_version(eng)))
+    check("接管记录写进 schema_version", runner.current_version(eng) == LATEST,
+          str(runner.current_version(eng)))
     eng.dispose()
 
     print("=" * 60)
