@@ -32,6 +32,9 @@ const state = {
 };
 
 const API_TIMEOUT_MS = 30000;
+// Batch12：执行方在线视图的心跳阈值。与平台 heartbeat_timeout_seconds 默认值保持一致口径。
+const WORKER_ONLINE_MS = 120000;
+const WORKER_VIEW_SIZE = 100;
 const RESULT_MAX_CHARS = 20000;
 const AUTO_KEY = "mwp_auto_refresh_ms";
 
@@ -331,6 +334,96 @@ function updateTaskRow(rec, t) {
   if (rec.last.reason !== reason) { rec.last.reason = reason; setCellText(rec.cells.reason, reason); }
 }
 
+/* ---------- 执行方在线视图（Batch12）
+   不新增接口：抓最近 100 条任务，按 target_worker 聚合。
+   在线判断靠 last_heartbeat_time，超过阈值算静默。 */
+function aggregateWorkers(items) {
+  const map = new Map();
+  (items || []).forEach((t) => {
+    const key = t.target_worker || "（未标注）";
+    let rec = map.get(key);
+    if (!rec) {
+      rec = { worker: key, total: 0, running: 0, waiting: 0, failed: 0, lastHb: null };
+      map.set(key, rec);
+    }
+    rec.total += 1;
+    if (t.status === "执行中") rec.running += 1;
+    else if (t.status === "待验收") rec.waiting += 1;
+    else if (t.status === "执行失败" || t.status === "验收驳回") rec.failed += 1;
+    if (t.last_heartbeat_time) {
+      const ms = Date.parse(t.last_heartbeat_time);
+      if (!Number.isNaN(ms) && (rec.lastHb === null || ms > rec.lastHb)) rec.lastHb = ms;
+    }
+  });
+  return Array.from(map.values()).sort((a, b) => b.running - a.running || b.total - a.total);
+}
+
+function workerState(rec) {
+  if (rec.lastHb === null) return { label: "未知", cls: "idle" };
+  const age = Date.now() - rec.lastHb;
+  if (age <= WORKER_ONLINE_MS) return { label: "在线", cls: "ok" };
+  return { label: "静默", cls: "warn" };
+}
+
+function renderWorkers(items) {
+  const wrap = el("workerTableWrap");
+  if (!wrap) return;
+  const rows = aggregateWorkers(items);
+  el("workerCount").textContent = rows.length ? `（${rows.length}）` : "";
+  if (!rows.length) {
+    wrap.innerHTML = '<div class="empty">还没有任何任务，暂无执行方</div>';
+    return;
+  }
+  const table = document.createElement("table");
+  const head = document.createElement("tr");
+  ["执行方", "任务总数", "在跑", "待验收", "失败/驳回", "最近心跳", "状态"].forEach((h) => {
+    const th = document.createElement("th");
+    th.textContent = h;
+    head.appendChild(th);
+  });
+  table.appendChild(head);
+  rows.forEach((rec) => {
+    const tr = document.createElement("tr");
+    tr.appendChild(td(rec.worker, "mono"));
+    tr.appendChild(td(String(rec.total)));
+    tr.appendChild(td(String(rec.running)));
+    tr.appendChild(td(String(rec.waiting)));
+    tr.appendChild(td(String(rec.failed)));
+    tr.appendChild(td(rec.lastHb === null ? "—" : new Date(rec.lastHb).toLocaleTimeString()));
+    const st = workerState(rec);
+    const cell = document.createElement("td");
+    const span = document.createElement("span");
+    span.className = "tag " + st.cls;
+    span.textContent = st.label;
+    cell.appendChild(span);
+    tr.appendChild(cell);
+    table.appendChild(tr);
+  });
+  wrap.innerHTML = "";
+  wrap.appendChild(table);
+}
+
+function td(content, cls) {
+  const cell = document.createElement("td");
+  cell.appendChild(text(content, cls));
+  return cell;
+}
+
+async function loadWorkers() {
+  try {
+    const r = await api(`${ROUTES.tasks}?page=1&size=${WORKER_VIEW_SIZE}`);
+    if (!r.ok) {
+      const wrap = el("workerTableWrap");
+      if (wrap) wrap.innerHTML = `<div class="empty">执行方视图读取失败：${r.status}</div>`;
+      return;
+    }
+    renderWorkers(r.body.items || []);
+  } catch (e) {
+    const wrap = el("workerTableWrap");
+    if (wrap) wrap.innerHTML = `<div class="empty">执行方视图请求异常：${e}</div>`;
+  }
+}
+
 async function loadDetail(traceId, opts = {}) {
   const silent = !!opts.silent;
   if (!silent) clearResult("cmdResult");
@@ -367,6 +460,7 @@ async function refreshOnce() {
   refreshing = true;
   try {
     await checkHealth();
+    await loadWorkers();
     await loadPipelines();
     if (state.trace) await loadDetail(state.trace, { silent: true });
     markRefreshed();
@@ -512,6 +606,7 @@ function bind() {
     state.token = el("tokenInput").value.trim();
     localStorage.setItem("mwp_token", state.token);
     checkHealth();
+    loadWorkers();
     loadPipelines();
   });
   el("reloadPipes").addEventListener("click", () => { state.page = 1; loadPipelines().then(markRefreshed); });
@@ -559,5 +654,6 @@ state.token = localStorage.getItem("mwp_token") || "";
 el("tokenInput").value = state.token;
 bind();
 checkHealth();
+loadWorkers();
 loadPipelines();
 setAutoRefresh(localStorage.getItem(AUTO_KEY) || 0);

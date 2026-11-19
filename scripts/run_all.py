@@ -27,6 +27,7 @@ SCRIPTS = [
     ("Batch9 真 Worker 端到端（轮询/执行/心跳/回执）", "verify_b9.py"),
     ("Batch10 越权强校验/重放拦截", "verify_b10.py"),
     ("Batch11 Worker 并发/优先级/优雅退出/守护模板", "verify_b11.py"),
+    ("Batch12 执行方在线视图/弹性并发", "verify_b12.py"),
 ]
 
 

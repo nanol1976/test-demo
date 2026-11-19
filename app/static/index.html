@@ -20,6 +20,12 @@
 
 <main>
   <section>
+    <div class="panel" id="workerPanel">
+      <h2>执行方<span class="count" id="workerCount"></span></h2>
+      <p class="hint">按任务归属聚合：在跑数、待验收数、最近心跳。心跳在 120 秒内算「在线」，超过算「静默」——平台不单独记 Worker，靠任务心跳推断，所以不新增接口。</p>
+      <div id="workerTableWrap"><div class="empty">加载中…</div></div>
+    </div>
+
     <div class="panel">
       <h2>流水线<span class="count" id="pipeCount"></span></h2>
       <div class="toolbar">

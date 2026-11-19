@@ -16,6 +16,7 @@ from app.api.deps import get_db, get_session_factory
 from app.api.schemas_http import ArchiveView, ErrorBody, MessageAccepted, PipelineView, TaskView
 from app.bus import BusBackpressureError, BusTimeoutError, MessageBus
 from app.bus.router import HandlerResult, Router, UnknownMsgTypeError, VALID_MSG_TYPES
+from app.core.clock import ensure_utc
 from app.core.logging import get_logger
 from app.core.security import require_token
 from app.models import MessageArchive
@@ -95,6 +96,8 @@ def _task_view(task) -> TaskView:
         abort_reason=task.abort_reason,
         depends_on=list(task.depends_on or []),
         payload=_task_payload(task),
+        last_heartbeat_time=(ensure_utc(task.last_heartbeat_time).isoformat()
+                             if task.last_heartbeat_time else None),
     )
 
 

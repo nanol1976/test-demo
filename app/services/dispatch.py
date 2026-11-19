@@ -78,7 +78,11 @@ def _find_archive(db: Session, envelope: Envelope) -> Optional[MessageArchive]:
 # 只有"执行方动作"才做内容级重放拦截。
 # task_dispatch 刻意排除：驳回后 Master 用同样 payload 重派是合法重试，
 # 若按内容判重会被误杀（同一 timestamp 的精确重放仍由幂等键拦住）。
-REPLAY_GUARDED_TYPES = {"task_heartbeat", "task_return", "task_reject", "task_abort"}
+# Batch12 修正：心跳是"周期性合法重复"，不能按内容去重。
+# 一个跑 10 分钟的任务会发上百条内容完全一样的心跳，若按 sender+payload 拦成重放，
+# 台账的 last_heartbeat_time 会永远停在第一条——"还在干活"的证据就丢了。
+# 心跳的重复投递交给幂等键（trace_id+task_id+msg_type+timestamp）兜底。
+REPLAY_GUARDED_TYPES = {"task_return", "task_reject", "task_abort"}
 
 
 def _fingerprint(envelope: Envelope):
@@ -296,6 +300,8 @@ def handle_task_heartbeat(db: Session, envelope: Envelope) -> HandlerResult:
     _require_same_trace(task, envelope, "task_heartbeat")
     _require_owner(task, envelope, "task_heartbeat")
     archive_id = archive_message(db, envelope)
+    # Batch12：台账记最近心跳，供"执行方在线视图"聚合（仍不改变任务状态）
+    repo.mark_heartbeat(envelope.task_id, envelope.timestamp)
     return HandlerResult(archive_id, False, "心跳已记录（不改状态，超时判定属 Batch4）")
 
 

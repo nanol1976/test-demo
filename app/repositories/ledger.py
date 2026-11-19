@@ -301,6 +301,16 @@ class LedgerRepository:
         self.db.refresh(row)
         return row
 
+    def mark_heartbeat(self, task_id: str, when: datetime) -> Optional[TaskLedger]:
+        """记最近一次心跳时间（不改状态）。只更新，不删除。"""
+        row = self.db.get(TaskLedger, task_id)
+        if row is None:
+            return None
+        row.last_heartbeat_time = when
+        self.db.commit()
+        self.db.refresh(row)
+        return row
+
     def mark_return_time(self, task_id: str, when: datetime) -> Optional[TaskLedger]:
         row = self.db.get(TaskLedger, task_id)
         if row is None:

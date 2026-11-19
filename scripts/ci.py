@@ -242,6 +242,26 @@ def stage_static():
                 missing_tpl.append(f"{rel}:{needle}")
     check("三平台守护模板齐全且关键字段在", not missing_tpl, "; ".join(missing_tpl[:4]))
 
+    # 1.5b3 执行方在线视图红线（Batch12）：靠任务心跳推断，不新增接口
+    model_py = read(os.path.join(ROOT, "app", "models", "__init__.py"))
+    check("台账有 last_heartbeat_time 列", "last_heartbeat_time" in model_py, "缺列")
+    check("迁移 v004 存在", os.path.exists(os.path.join(ROOT, "migrations", "versions",
+                                                       "v004_task_last_heartbeat.py")))
+    dispatch_py = read(os.path.join(ROOT, "app", "services", "dispatch.py"))
+    check("心跳落库（mark_heartbeat 在心跳处理里被调用）",
+          "mark_heartbeat" in dispatch_py, "心跳没记时间")
+    check("心跳不走内容级重放拦截（否则时间永远停在第一条）",
+          "task_heartbeat" not in re.findall(r"REPLAY_GUARDED_TYPES\s*=\s*\{([^}]*)\}",
+                                          dispatch_py, re.S)[0],
+          "心跳被当成重放拦掉了")
+    js = read(os.path.join(ROOT, "app", "static", "app.js"))
+    html = read(os.path.join(ROOT, "app", "static", "index.html"))
+    check("看板有执行方视图", "workerTableWrap" in html and "aggregateWorkers" in js)
+    check("执行方视图只用已有接口（没有 /api/workers）",
+          "/api/workers" not in js and "/api/workers" not in html)
+    check("Worker 有弹性并发下限 --min-concurrency",
+          "--min-concurrency" in worker_py, "缺参数")
+
     # 1.5c 越权与重放红线（Batch10）：权限校验不能被"顺手删掉"
     dispatch_py = read(os.path.join(ROOT, "app", "services", "dispatch.py"))
     owner_calls = re.findall(r"_require_owner\(task, envelope, \"task_(\w+)\"", dispatch_py)

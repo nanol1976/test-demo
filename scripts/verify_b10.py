@@ -173,24 +173,33 @@ def main() -> int:
         check("重放不追加归档", rows(client, "t-b10-r") == rows_before,
               f"{rows_before} → {rows(client, 't-b10-r')}")
 
-        print("=== F 重放拦截同样作用于 heartbeat ===")
+        print("=== F 心跳是周期报文：同内容不同时间必须照常受理 ===")
         r = dispatch(client, "t-b10-hb", "t-b10-hb-1", "workbuddy", 50)
         check("合法派发 202", r.status_code == 202, f"status={r.status_code}")
         hb = {"progress": 0.5, "message": "半程"}
         r = post(client, env("t-b10-hb", "t-b10-hb-1", "task_heartbeat", "workbuddy", hb, 51))
         check("首次心跳 202", r.status_code == 202, f"status={r.status_code}")
         rows_before = rows(client, "t-b10-hb")
+        # 同 payload、新 timestamp：这是 Worker 每秒/每几秒一次的常规心跳，必须受理
         r = post(client, env("t-b10-hb", "t-b10-hb-1", "task_heartbeat", "workbuddy", hb, 55))
-        check("心跳重放 202 但被拦", r.status_code == 202 and "重放" in (r.json() or {}).get("note", ""),
+        check("同内容的心跳（新时间戳）照常受理", r.status_code == 202 and "重放" not in (r.json() or {}).get("note", ""),
               f"status={r.status_code} note={(r.json() or {}).get('note')}")
-        check("重放不刷归档（没有伪造的第二次心跳）", rows(client, "t-b10-hb") == rows_before,
+        check("心跳落地（归档 +1）", rows(client, "t-b10-hb") == rows_before + 1,
               f"{rows_before} → {rows(client, 't-b10-hb')}")
+        # 同 payload + 同 timestamp 才是真重复，由幂等键挡
+        r = post(client, env("t-b10-hb", "t-b10-hb-1", "task_heartbeat", "workbuddy", hb, 55))
+        check("同时间戳重复投递被幂等挡（不追加归档）",
+              r.status_code == 202 and "幂等" in (r.json() or {}).get("note", ""),
+              f"status={r.status_code} note={(r.json() or {}).get('note')}")
+        check("幂等不刷归档", rows(client, "t-b10-hb") == rows_before + 1,
+              f"→ {rows(client, 't-b10-hb')}")
 
         print("=== G 篡改 payload 的重放仍按新报文走（不被误杀）===")
+        rows_g = rows(client, "t-b10-hb")
         r = post(client, env("t-b10-hb", "t-b10-hb-1", "task_heartbeat", "workbuddy",
                              {"progress": 0.8, "message": "后程"}, 60))
         check("payload 不同的心跳正常受理", r.status_code == 202, f"status={r.status_code}")
-        check("归档 +1", rows(client, "t-b10-hb") == rows_before + 1, str(rows(client, "t-b10-hb")))
+        check("归档 +1", rows(client, "t-b10-hb") == rows_g + 1, str(rows(client, "t-b10-hb")))
 
         print("=== H 接口面与台账铁律 ===")
         spec = client.get("/openapi.json").json()

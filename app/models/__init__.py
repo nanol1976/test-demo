@@ -50,6 +50,8 @@ class TaskLedger(Base):
     # Batch9：派发报文的载荷（JSON 文本，可空）。
     # 平台只搬运不解释；Worker 轮询时靠它拿到"要干什么"。
     dispatch_payload: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Batch12：最近一次心跳时间（可空）。在线视图靠它聚合，不新增接口。
+    last_heartbeat_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     pipeline: Mapped["PipelineLedger"] = relationship("PipelineLedger", back_populates="tasks")
 

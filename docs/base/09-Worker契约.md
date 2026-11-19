@@ -137,11 +137,13 @@ POST /api/messages                                    # 报活 / 交活 / 报做
 
 | 项 | 口径 |
 | --- | --- |
-| 并发 | `--concurrency N` 同时执行 N 个任务；槽位满了就停止拉新活，不堆积 |
+| 并发（上限） | `--concurrency N` 最多同时执行 N 个任务；槽位满了就停止拉新活，不堆积 |
 | 优先级 | `payload.priority`（数字，越大越先）；同优先级按 `dispatch_time` 升序、再按 `task_id` 兜底。**平台只搬运不排序**，排序是实现方的事 |
 | 停止 | 收到 `SIGTERM`/`SIGINT` → 不再拉新活 → 等在跑任务收尾（`--grace-seconds`，默认 30）→ 退出 0。**不要在主流程里杀掉子进程**，否则任务会留在「执行中」等平台判超时 |
 | 被强杀 | `SIGKILL` 时任务留在「执行中」，由平台 `task_timeout_seconds` / `heartbeat_timeout_seconds` 处置；不会被伪造成成功或失败 |
-| 状态可观测 | `--status-file` 每轮落一个小 JSON（`worker_id`/`updated_at`/`concurrency`/`in_flight`/`handled`/`poll`），守护脚本与运维直接读它 |
+| 弹性并发（下限） | `--min-concurrency M` **Batch12**：每轮按积压 `待办+在跑` 算 `limit = clamp(积压, M, N)`，只提交 `limit - 在跑` 个。积压 4 个、上限 4 下限 1 → 并发打开到 4；只剩 1 个活 → 回落到 1。省线程也省上游压力 |
+| 状态可观测 | `--status-file` 每轮落一个小 JSON（`worker_id`/`updated_at`/`concurrency`/`limit`/`backlog`/`in_flight`/`handled`/`poll`），守护脚本与运维直接读它 |
+| 在线视图 | 平台不维护 Worker 注册表。心跳每发一次就刷新台账 `last_heartbeat_time`，看板按 `target_worker` 聚合 + 120s 阈值判"在线/静默"。**想让自己看起来在线，就照常发心跳** |
 
 ## 七、重试
 

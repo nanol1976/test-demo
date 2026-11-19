@@ -25,6 +25,8 @@ class TaskView(BaseModel):
     depends_on: List[str] = Field(default_factory=list)
     # Batch9：派发载荷原文（原样搬运，平台不解释；老数据为 None）
     payload: Optional[Dict[str, Any]] = None
+    # Batch12：最近一次心跳时间（在线视图用；从未心跳为 None）
+    last_heartbeat_time: Optional[str] = None
 
 
 class PipelineView(BaseModel):

@@ -70,6 +70,8 @@ python worker/agent_worker.py --base-url http://127.0.0.1:8000 --worker-id workb
 
 `payload.priority`（数字，越大越先）由 Worker 本地排序，平台只搬运不排序。
 
+并发是**弹性**的：`--concurrency` 是上限，`--min-concurrency`（默认 1）是下限，每轮按积压自适应。看板首屏有「执行方」面板：按任务归属聚合在跑数/待验收数/最近心跳，120 秒内有心跳算「在线」，否则「静默」——平台不单记 Worker，所以接口面仍是 9 个。
+
 Worker 干什么由派发报文的 `payload.exec` 决定（白名单目录内的 `.py` + 参数 + 硬超时）：
 
 ```json
@@ -129,7 +131,7 @@ python deploy/migrate.py --baseline 2 --force  # 已有版本记录时强制重�
 ## 测试与 CI
 
 ```bash
-python scripts/run_all.py            # 一键：verify_b2/b3/b4/b5/b7/b8/b9/b10/b11 + 真实起服务冒烟
+python scripts/run_all.py            # 一键：verify_b2/b3/b4/b5/b7/b8/b9/b10/b11/b12 + 真实起服务冒烟
 python scripts/run_all.py --no-smoke # 跳过冒烟
 python scripts/ci.py                 # CI 门禁：静态红线 + 迁移三段式 + 全量测试
 python scripts/ci.py --static-only   # 只跑静态门禁（快，本地提交前跑）
@@ -234,7 +236,7 @@ worker/         agent_worker.py（真 Worker：轮询/执行/心跳/回执）+ e
 deploy/         run.ps1 / run.sh / migrate.py
 migrations/     runner.py + versions/（版本化增量迁移）
 .github/        workflows/ci.yml（接仓库即可用）
-scripts/        init_db / verify_b2..b11 / run_all / smoke_http / ci
+scripts/        init_db / verify_b2..b12 / run_all / smoke_http / ci
 docs/           Batch 任务卡与验收单
 docs/base/      底座规范（架构·SOP·协议·状态机·契约·故障案例…）
 ```

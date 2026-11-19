@@ -169,7 +169,8 @@ class Heartbeat(threading.Thread):
 class WorkerAgent:
     def __init__(self, client: PlatformClient, worker_id: str, allow_roots,
                  work_dir: str, heartbeat_interval: float, max_task_seconds: float,
-                 state_file: str = "", concurrency: int = 1, status_file: str = ""):
+                 state_file: str = "", concurrency: int = 1, status_file: str = "",
+                 min_concurrency: int = 1):
         if worker_id not in ALLOWED_SENDERS:
             raise SystemExit(f"--worker-id 必须是 {ALLOWED_SENDERS} 之一（sender 就是执行方身份）")
         self.client = client
@@ -180,7 +181,9 @@ class WorkerAgent:
         self.max_task_seconds = max_task_seconds
         self.state_file = state_file
         self.status_file = status_file
+        # 弹性并发：min 是下限（至少同时跑几个），concurrency 是上限
         self.concurrency = max(1, int(concurrency))
+        self.min_concurrency = max(1, min(int(min_concurrency), self.concurrency))
         self.done = self._load_state()
         # 优雅退出：收到 SIGTERM/SIGINT 后不再拉新活，等在跑的任务收尾再退
         self._stop_requested = threading.Event()
@@ -396,10 +399,10 @@ class WorkerAgent:
                     _drain(grace_seconds)
                     return 0
 
-                # 并发槽位满了就先不拉新活
-                slots = self.concurrency - len(inflight)
-                if slots <= 0:
-                    self._write_status(poll="busy", in_flight=len(inflight), handled=handled)
+                # 到达并发上限就先不拉新活（下限/上限之间按积压自适应，见下方 slots）
+                if len(inflight) >= self.concurrency:
+                    self._write_status(poll="busy", in_flight=len(inflight), handled=handled,
+                                       limit=self.concurrency)
                     time.sleep(min(poll_interval, 1.0))
                     continue
 
@@ -418,6 +421,11 @@ class WorkerAgent:
                 seen = set(self.done) | {t.get("task_id") for t in self._inflight_tasks(inflight)}
                 todo = [t for t in tasks if t.get("task_id") not in seen]
                 todo.sort(key=self._sort_key)
+
+                # 弹性并发：积压多就多开，积压少就少开（夹在 min..max 之间）
+                backlog = len(todo) + len(inflight)
+                limit = min(self.concurrency, max(self.min_concurrency, backlog))
+                slots = max(0, limit - len(inflight))
 
                 if not todo:
                     idle_rounds += 1
@@ -448,7 +456,8 @@ class WorkerAgent:
                         _drain(grace_seconds)
                         return 0
 
-                self._write_status(poll="ok", in_flight=len(inflight), handled=handled)
+                self._write_status(poll="ok", in_flight=len(inflight), handled=handled,
+                                   limit=limit, backlog=len(todo))
                 if once:
                     # 一轮里可能还有活（并发槽位受限时按批提交），继续循环，
                     # 由"没待办且没在跑"的分支负责退出。
@@ -478,7 +487,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--idle-exit-rounds", type=int, default=0, help="连续 N 轮没活就退出，0=常驻")
     p.add_argument("--once", action="store_true", help="处理一轮（含并发的多个任务）后退出")
     p.add_argument("--state-file", default="", help="本地已完成任务记录，防止重启重复处理")
-    p.add_argument("--concurrency", type=int, default=1, help="并发执行的任务数（默认 1=串行）")
+    p.add_argument("--concurrency", type=int, default=1, help="并发执行的任务数上限（默认 1=串行）")
+    p.add_argument("--min-concurrency", type=int, default=1,
+                   help="弹性并发的下限：至少同时跑几个（默认 1；积压多时会自动涨到 --concurrency 上限）")
     p.add_argument("--grace-seconds", type=float, default=30.0, help="收到停止信号后等在跑任务收尾的秒数")
     p.add_argument("--status-file", default="", help="运行时状态 JSON 落盘路径（守护与运维用）")
     return p
@@ -497,6 +508,7 @@ def main(argv=None) -> int:
         state_file=args.state_file,
         concurrency=args.concurrency,
         status_file=args.status_file,
+        min_concurrency=args.min_concurrency,
     )
     log("worker_start", worker_id=args.worker_id, base_url=args.base_url,
         allow_roots=allow_roots, work_dir=args.work_dir)
