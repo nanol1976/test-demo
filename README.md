@@ -53,8 +53,8 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 | GET | `/api/pipelines/{trace_id}` | 流水线详情 + 任务列表 |
 | GET | `/api/tasks/{task_id}` | 单任务 |
 | GET | `/api/archive/{trace_id}` | 归档索引行数 + JSONL 路径 |
-| GET | `/api/pipelines` | 流水线分页列表（状态/时间筛选） |
-| GET | `/api/tasks` | 任务分页列表（trace/状态/执行方筛选） |
+| GET | `/api/pipelines` | 流水线分页列表（状态/时间筛选 + 关键字 + 排序） |
+| GET | `/api/tasks` | 任务分页列表（trace/状态/执行方筛选 + 关键字 + 排序） |
 | GET | `/api/export/{trace_id}` | 导出台账快照（json / csv） |
 | POST | `/api/commands` | 运维指令：pause / resume / clear-breaker |
 
@@ -75,20 +75,24 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 库结构走**版本化迁移**，不靠「改模型 + 启动自动建表」兜底：
 
 ```bash
-python deploy/migrate.py              # 升级到最新
-python deploy/migrate.py --check      # 只检查（不通过 exit 1）
-python deploy/migrate.py --status     # 每个版本：已应用 / 待应用
-python deploy/migrate.py --to 2       # 只升到 v002
-python deploy/migrate.py --dry-run    # 只打印将要执行什么
+python deploy/migrate.py                    # 升级到最新
+python deploy/migrate.py --check            # 只检查（不通过 exit 1）
+python deploy/migrate.py --status           # 每个版本：已应用 / 待应用
+python deploy/migrate.py --to 2             # 只升到 v002
+python deploy/migrate.py --dry-run          # 只打印将要执行什么
+python deploy/migrate.py --baseline 2       # 接管既有库（表已建好，只补版本记录）
+python deploy/migrate.py --baseline 2 --force  # 已有版本记录时强制重写（慎用）
 ```
 
 迁移文件在 `migrations/versions/vNNN_xxx.py`，约定见 [docs/base/13-迁移规范.md](docs/base/13-迁移规范.md)。
 每个迁移必须导出 `VERSION` / `NOTE` / `up(conn)`，`up` 要在事务内可重复执行；重号或编号与文件名不符会被直接拒绝。
 
+`--baseline N` 用于"表已建好但没有版本记录"的既有库：**只写版本记录，不执行任何 `up()`**。默认拒绝已有版本、拒绝缺表的库；`--force` 才会清 `schema_version` 重写（唯一允许的删除，且只碰元数据表）。
+
 ## 测试与 CI
 
 ```bash
-python scripts/run_all.py            # 一键：verify_b2/b3/b4/b5/b7 + 真实起服务冒烟
+python scripts/run_all.py            # 一键：verify_b2/b3/b4/b5/b7/b8 + 真实起服务冒烟
 python scripts/run_all.py --no-smoke # 跳过冒烟
 python scripts/ci.py                 # CI 门禁：静态红线 + 迁移三段式 + 全量测试
 python scripts/ci.py --static-only   # 只跑静态门禁（快，本地提交前跑）
@@ -96,7 +100,6 @@ python scripts/smoke_http.py         # 单独跑冒烟（起 uvicorn 打关键�
 ```
 
 CI 门禁查什么：
-
 | 门禁 | 检查内容 |
 | --- | --- |
 | 语法 | 全部 `.py` 可编译 |
@@ -105,20 +108,22 @@ CI 门禁查什么：
 | 接口面 | 仍为 9 个接口，方法只有 GET/POST |
 | 协议 | 8 种 msg_type 在枚举里、7 状态在 CHECK 里、幂等唯一约束在 |
 | 前端 | 零 CDN、有自动刷新开关、无 setInterval |
+| 前端契约 | 有搜索框/排序下拉、请求带 `q` 与 `sort`、行差量渲染 |
+| JS 语法 | `node --check app/static/app.js`（本机无 node 则跳过并留痕） |
+| 查询契约 | `q` 参数存在、排序走白名单常量、非法排序抛 ValueError |
 | 迁移 | 空库 --check 不通过 → upgrade 成功 → --check 通过 → 幂等 |
+
+怎么把门禁接到仓库（GitHub / Gitee / 内网 GitLab 三种写法、换行符与 BOM 的坑）：见 [docs/14-CI接入指南.md](docs/14-CI接入指南.md)。
+当前仓库只有本地 `master`、无远端，因此是"推送就绪"而非"已推送"。
 
 ## 看板
 
 - 自动刷新：列表工具栏可选 关 / 5s / 15s / 30s，间隔记在 localStorage；页面切到后台自动暂停（`visibilitychange`）。
 - 用 `setTimeout` 逐个排期，不用 `setInterval`——请求慢时不会堆积。
 - 自动刷新是「静默」的：只重拉列表与当前详情，不清空命令结果、不覆盖正在编辑的报文、不重置列表滚动位置。
-
-
-```bash
-python scripts/run_all.py            # 一键：verify_b2/b3/b4/b5 + 真实起服务冒烟
-python scripts/run_all.py --no-smoke # 跳过冒烟
-python scripts/smoke_http.py         # 单独跑冒烟（起 uvicorn 打关键路径再关掉）
-```
+- **搜索**：列表工具栏输入 trace_id / 需求关键字，400ms 防抖后带 `q` 重新查询（服务端子串匹配，不是前端过滤）。
+- **排序**：时间最新在前 / 最早在前，走服务端白名单排序；非法值直接 422，不会把参数透给 SQL。
+- **差量刷新**：表格按 `trace_id` / `task_id` 复用 DOM 行，只改变化的单元格（状态、暂停、时间、需求、执行方…），不再每次整表重建——滚动位置与选中行不会跳。
 
 任何 FAIL 都不算通过。双端（Windows / Mac）须逐行一致。
 
@@ -154,6 +159,8 @@ docs/base/      底座规范（架构·SOP·协议·状态机·契约·故障案
 | 6 | `ensure_schema` 自动建表 | 仅兜底，生产走 `deploy/migrate.py` |
 | 7 | 迁移无自动回滚 | 数据不可回滚，只能写「向前」迁移 |
 | 8 | CI 未接远端仓库 | workflow 已就位，推到仓库才真正跑 |
+| 9 | 关键字搜索是 `LIKE '%q%'` 子串匹配 | 台账到十万级会慢，届时改用检索表或 FTS |
+| 10 | `--baseline --force` 会清 `schema_version` | 只碰元数据表、需人工显式加参数，但仍属"删"，用前先备份 |
 
 ## 台账铁律
 

@@ -26,7 +26,10 @@ const STATUS_STYLE = {
   执行失败: ["bad"],
 };
 
-const state = { token: "", page: 1, size: 20, pages: 1, total: 0, status: "", trace: null, autoMs: 0 };
+const state = {
+  token: "", page: 1, size: 20, pages: 1, total: 0, status: "",
+  q: "", sort: "start_time_desc", trace: null, autoMs: 0,
+};
 
 const API_TIMEOUT_MS = 30000;
 const RESULT_MAX_CHARS = 20000;
@@ -107,10 +110,19 @@ async function checkHealth() {
   }
 }
 
+/* ---------- 差量渲染 ----------
+   列表按 trace_id、任务表按 task_id 复用 DOM 行，只改变化的单元格。
+   自动刷新时不再整表重绘，滚动位置、选中行、鼠标悬停都不会跳。 */
+const listRows = new Map();
+const taskRows = new Map();
+
+function setCellText(cell, value, cls) {
+  cell.innerHTML = "";
+  cell.appendChild(text(value, cls));
+}
+
 function renderPipelines(payload) {
   const wrap = el("pipeTableWrap");
-  const prevScroll = wrap.scrollTop;
-  wrap.innerHTML = "";
   const meta = payload.meta || {};
   state.pages = meta.pages || 1;
   state.total = meta.total || 0;
@@ -122,49 +134,100 @@ function renderPipelines(payload) {
   const items = payload.items || [];
   if (!items.length) {
     wrap.innerHTML = '<div class="empty">没有符合条件的流水线</div>';
+    listRows.clear();
     return;
   }
 
-  const table = document.createElement("table");
-  table.innerHTML = "<thead><tr><th>trace_id</th><th>状态</th><th>暂停</th><th>起始时间</th><th>原始需求</th></tr></thead>";
-  const tbody = document.createElement("tbody");
-  items.forEach((p) => {
-    const row = document.createElement("tr");
-    row.className = "clickable";
-    if (p.trace_id === state.trace) row.classList.add("selected");
-    const c1 = document.createElement("td");
-    c1.appendChild(text(p.trace_id, "mono"));
-    const c2 = document.createElement("td");
-    c2.appendChild(tag(p.overall_status));
-    const c3 = document.createElement("td");
-    c3.appendChild(text(p.pause_flag ? "已暂停" : "正常"));
-    const c4 = document.createElement("td");
-    c4.appendChild(text(p.start_time));
-    const c5 = document.createElement("td");
-    c5.appendChild(text(p.original_demand));
-    [c1, c2, c3, c4, c5].forEach((c) => row.appendChild(c));
-    row.addEventListener("click", () => loadDetail(p.trace_id));
-    tbody.appendChild(row);
+  let table = wrap.querySelector("table");
+  if (!table) {
+    wrap.innerHTML = "";
+    table = document.createElement("table");
+    table.innerHTML = "<thead><tr><th>trace_id</th><th>状态</th><th>暂停</th><th>起始时间</th><th>原始需求</th></tr></thead>";
+    table.appendChild(document.createElement("tbody"));
+    wrap.appendChild(table);
+  }
+  const tbody = table.querySelector("tbody");
+  const prevScroll = wrap.scrollTop;
+
+  const seen = new Set();
+  items.forEach((p, idx) => {
+    seen.add(p.trace_id);
+    let rec = listRows.get(p.trace_id);
+    if (!rec) {
+      rec = buildPipelineRow(p);
+      listRows.set(p.trace_id, rec);
+    }
+    updatePipelineRow(rec, p);
+    const atPos = tbody.children[idx];
+    if (atPos !== rec.row) tbody.insertBefore(rec.row, atPos || null);
   });
-  table.appendChild(tbody);
-  wrap.appendChild(table);
+  Array.from(tbody.children).forEach((row) => {
+    if (!seen.has(row.dataset.trace)) row.remove();
+  });
+  for (const key of Array.from(listRows.keys())) {
+    if (!seen.has(key)) listRows.delete(key);
+  }
   wrap.scrollTop = prevScroll;
+}
+
+function buildPipelineRow(p) {
+  const row = document.createElement("tr");
+  row.className = "clickable";
+  row.dataset.trace = p.trace_id;
+  const cells = {};
+  ["trace", "status", "pause", "time", "demand"].forEach((k) => {
+    cells[k] = document.createElement("td");
+    row.appendChild(cells[k]);
+  });
+  cells.trace.appendChild(text(p.trace_id, "mono"));
+  row.addEventListener("click", () => loadDetail(p.trace_id));
+  return { row, cells, last: { trace: p.trace_id } };
+}
+
+function updatePipelineRow(rec, p) {
+  if (rec.last.status !== p.overall_status) {
+    rec.last.status = p.overall_status;
+    rec.cells.status.innerHTML = "";
+    rec.cells.status.appendChild(tag(p.overall_status));
+  }
+  const pause = p.pause_flag ? "已暂停" : "正常";
+  if (rec.last.pause !== pause) {
+    rec.last.pause = pause;
+    setCellText(rec.cells.pause, pause);
+  }
+  if (rec.last.time !== p.start_time) {
+    rec.last.time = p.start_time;
+    setCellText(rec.cells.time, p.start_time);
+  }
+  if (rec.last.demand !== p.original_demand) {
+    rec.last.demand = p.original_demand;
+    setCellText(rec.cells.demand, p.original_demand);
+  }
+  const selected = p.trace_id === state.trace;
+  if (rec.last.selected !== selected) {
+    rec.last.selected = selected;
+    rec.row.classList.toggle("selected", selected);
+  }
 }
 
 async function loadPipelines() {
   const query = new URLSearchParams();
   if (state.status) query.set("status", state.status);
+  if (state.q) query.set("q", state.q);
+  query.set("sort", state.sort);
   query.set("page", String(state.page));
   query.set("size", String(state.size));
   try {
     const r = await api(ROUTES.pipelines + "?" + query.toString());
     if (!r.ok) {
       el("pipeTableWrap").innerHTML = `<div class="empty">加载失败：${r.status} ${JSON.stringify(r.body)}</div>`;
+      listRows.clear();
       return;
     }
     renderPipelines(r.body);
   } catch (e) {
     el("pipeTableWrap").innerHTML = `<div class="empty">请求异常：${e}</div>`;
+    listRows.clear();
   }
 }
 
@@ -196,31 +259,76 @@ function renderDetail(p) {
   });
 
   const wrap = el("taskTableWrap");
-  wrap.innerHTML = "";
   const tasks = p.tasks || [];
   el("taskCount").textContent = `共 ${tasks.length} 个`;
   if (!tasks.length) {
     wrap.innerHTML = '<div class="empty">该流水线还没有任务</div>';
+    taskRows.clear();
     return;
   }
-  const table = document.createElement("table");
-  table.innerHTML = "<thead><tr><th>task_id</th><th>状态</th><th>执行方</th><th>派发时间</th><th>重试</th><th>依赖</th><th>原因</th></tr></thead>";
-  const tbody = document.createElement("tbody");
-  tasks.forEach((t) => {
-    const row = document.createElement("tr");
-    const c1 = document.createElement("td"); c1.appendChild(text(t.task_id, "mono"));
-    const c2 = document.createElement("td"); c2.appendChild(tag(t.status));
-    const c3 = document.createElement("td"); c3.appendChild(text(t.target_worker));
-    const c4 = document.createElement("td"); c4.appendChild(text(t.dispatch_time));
-    const c5 = document.createElement("td"); c5.appendChild(text(`${t.remaining_retry}/${t.max_retry}`));
-    const c6 = document.createElement("td"); c6.appendChild(text((t.depends_on || []).join(", ") || "—"));
-    const c7 = document.createElement("td");
-    c7.appendChild(text(t.abort_reason || t.reject_reason || "—"));
-    [c1, c2, c3, c4, c5, c6, c7].forEach((c) => row.appendChild(c));
-    tbody.appendChild(row);
+
+  let table = wrap.querySelector("table");
+  if (!table) {
+    wrap.innerHTML = "";
+    table = document.createElement("table");
+    table.innerHTML = "<thead><tr><th>task_id</th><th>状态</th><th>执行方</th><th>派发时间</th><th>重试</th><th>依赖</th><th>原因</th></tr></thead>";
+    table.appendChild(document.createElement("tbody"));
+    wrap.appendChild(table);
+  }
+  const tbody = table.querySelector("tbody");
+  const prevScroll = wrap.scrollTop;
+
+  const seen = new Set();
+  tasks.forEach((t, idx) => {
+    seen.add(t.task_id);
+    let rec = taskRows.get(t.task_id);
+    if (!rec) {
+      rec = buildTaskRow(t);
+      taskRows.set(t.task_id, rec);
+    }
+    updateTaskRow(rec, t);
+    const atPos = tbody.children[idx];
+    if (atPos !== rec.row) tbody.insertBefore(rec.row, atPos || null);
   });
-  table.appendChild(tbody);
-  wrap.appendChild(table);
+  Array.from(tbody.children).forEach((row) => {
+    if (!seen.has(row.dataset.task)) row.remove();
+  });
+  for (const key of Array.from(taskRows.keys())) {
+    if (!seen.has(key)) taskRows.delete(key);
+  }
+  wrap.scrollTop = prevScroll;
+}
+
+function buildTaskRow(t) {
+  const row = document.createElement("tr");
+  row.dataset.task = t.task_id;
+  const cells = {};
+  ["id", "status", "worker", "dispatch", "retry", "deps", "reason"].forEach((k) => {
+    cells[k] = document.createElement("td");
+    row.appendChild(cells[k]);
+  });
+  cells.id.appendChild(text(t.task_id, "mono"));
+  return { row, cells, last: { id: t.task_id } };
+}
+
+function updateTaskRow(rec, t) {
+  if (rec.last.status !== t.status) {
+    rec.last.status = t.status;
+    rec.cells.status.innerHTML = "";
+    rec.cells.status.appendChild(tag(t.status));
+  }
+  const worker = t.target_worker;
+  if (rec.last.worker !== worker) { rec.last.worker = worker; setCellText(rec.cells.worker, worker); }
+  if (rec.last.dispatch !== t.dispatch_time) {
+    rec.last.dispatch = t.dispatch_time;
+    setCellText(rec.cells.dispatch, t.dispatch_time);
+  }
+  const retry = `${t.remaining_retry}/${t.max_retry}`;
+  if (rec.last.retry !== retry) { rec.last.retry = retry; setCellText(rec.cells.retry, retry); }
+  const deps = (t.depends_on || []).join(", ") || "—";
+  if (rec.last.deps !== deps) { rec.last.deps = deps; setCellText(rec.cells.deps, deps); }
+  const reason = t.abort_reason || t.reject_reason || "—";
+  if (rec.last.reason !== reason) { rec.last.reason = reason; setCellText(rec.cells.reason, reason); }
 }
 
 async function loadDetail(traceId, opts = {}) {
@@ -415,6 +523,17 @@ function bind() {
     }
   });
   el("pipeStatus").addEventListener("change", (e) => { state.status = e.target.value; state.page = 1; loadPipelines(); });
+  el("pipeSort").addEventListener("change", (e) => { state.sort = e.target.value; state.page = 1; loadPipelines(); });
+  let searchTimer = null;
+  el("pipeSearch").addEventListener("input", (e) => {
+    clearTimeout(searchTimer);
+    const value = e.target.value.trim();
+    searchTimer = setTimeout(() => {
+      state.q = value;
+      state.page = 1;
+      loadPipelines();
+    }, 400);
+  });
   el("pipePrev").addEventListener("click", () => { if (state.page > 1) { state.page -= 1; loadPipelines(); } });
   el("pipeNext").addEventListener("click", () => { if (state.page < state.pages) { state.page += 1; loadPipelines(); } });
   el("btnPause").addEventListener("click", () => sendCommand("master:pause"));

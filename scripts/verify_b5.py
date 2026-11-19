@@ -109,7 +109,15 @@ def main() -> int:
         methods = {m.upper() for methods in openapi["paths"].values() for m in methods}
         check("方法集合仍只有 GET/POST", methods == {"GET", "POST"}, str(sorted(methods)))
         check("无 DELETE/PUT/PATCH", not ({"DELETE", "PUT", "PATCH"} & methods))
-        check("首页与静态资源不写台账", "delete" not in js.lower())
+        # 原先是 "delete" not in js（连 Map.delete(key) 都算违规，太粗）；
+        # 收窄成真正会毁数据的三种：发 DELETE 请求、写 DELETE FROM、drop table。
+        js_upper = js.upper()
+        check(
+            "首页与静态资源不删台账（无 DELETE 请求/SQL/删表）",
+            'METHOD: "DELETE"' not in js_upper
+            and "DELETE FROM" not in js_upper
+            and "DROP_TABLE" not in js_upper,
+        )
 
         print("=== D 端到端：页面靠的接口真能用 ===")
         r = client.post("/api/messages", json=body("t-b5", "t-b5-1", "task_dispatch",

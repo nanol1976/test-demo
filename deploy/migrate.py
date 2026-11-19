@@ -18,7 +18,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from sqlalchemy import create_engine, inspect  # noqa: E402
+from sqlalchemy import create_engine, inspect, text  # noqa: E402
 
 from app.core.config import get_settings  # noqa: E402
 from app.models import Base  # noqa: E402
@@ -49,14 +49,81 @@ def target_version():
         raise SystemExit(1)
 
 
+def baseline_version():
+    """--baseline N：把"表已建好但没有版本记录"的既有库接管到第 N 版。"""
+    if "--baseline" not in sys.argv:
+        return None
+    idx = sys.argv.index("--baseline")
+    if idx + 1 >= len(sys.argv):
+        print("--baseline 需要一个版本号，例如 --baseline 2")
+        raise SystemExit(1)
+    try:
+        return int(sys.argv[idx + 1])
+    except ValueError:
+        print(f"--baseline 的版本号不是整数：{sys.argv[idx + 1]}")
+        raise SystemExit(1)
+
+
+def run_baseline(engine, version: int, force: bool) -> int:
+    """接管既有库：只写版本记录，不执行任何 up()。
+
+    适用场景：库是手工建的、或从更早版本迁移过来的，表结构已经正确，
+    只是缺 schema_version 记录——这时不能跑 v001（会重复建表），只能"认账"。
+    """
+    latest = runner.latest_available()
+    if version < 1 or version > latest:
+        print(f"--baseline 版本必须在 1..{latest} 之间")
+        return 1
+
+    tables_needed = [t.name for t in Base.metadata.sorted_tables]
+    existing = set(inspect(engine).get_table_names())
+    missing = [t for t in tables_needed if t not in existing]
+    if missing:
+        print(f"拒绝接管：缺表 {missing}（baseline 只用于表已建好的库，缺表请直接跑迁移）")
+        return 1
+
+    current = runner.current_version(engine)
+    if current > 0 and not force:
+        print(f"拒绝接管：已有版本记录（当前 {current}）；确需覆盖请加 --force")
+        return 1
+
+    runner.ensure_version_table(engine)
+    if force and current > 0:
+        print(f"→ --force：清理旧版本记录（原最大值 {current}）")
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM schema_version"))
+
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    applied = []
+    with engine.begin() as conn:
+        for row in runner.discover():
+            if row.version > version:
+                continue
+            conn.execute(
+                text("INSERT INTO schema_version (version, applied_at, note) VALUES (:v, :a, :n)"),
+                {"v": row.version, "a": now, "n": f"baseline 接管：{row.note}（未实际执行）"},
+            )
+            applied.append(row.version)
+    print(f"→ 接管 v{applied[0]:03d}..v{applied[-1]:03d}（共 {len(applied)} 条，未执行 up）")
+    print(f"schema_version：{current} → {runner.current_version(engine)}")
+    print("接管完成；后续新迁移会从 v%03d 之后继续" % applied[-1])
+    return 0
+
+
 def main() -> int:
     check_only = flag("--check")
     show_status = flag("--status")
     dry_run = flag("--dry-run")
     target = target_version()
+    baseline = baseline_version()
 
     engine, url = connect()
     print(f"数据库：{url}")
+
+    if baseline is not None:
+        return run_baseline(engine, baseline, flag("--force"))
 
     tables_needed = [t.name for t in Base.metadata.sorted_tables]
     existing = set(inspect(engine).get_table_names())

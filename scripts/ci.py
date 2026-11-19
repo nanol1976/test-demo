@@ -15,6 +15,7 @@
 import os
 import py_compile
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 PY = sys.executable
+shutil_which = shutil.which
 
 FAILS = []
 
@@ -163,6 +165,35 @@ def stage_static():
 
     found = runner.discover()
     check("迁移文件可发现且递增", len(found) >= 2 and all(found[i].version < found[i + 1].version for i in range(len(found) - 1)), f"{[m.version for m in found]}")
+
+    # 1.9 查询契约：关键字与排序走白名单（不许把 sort 直通给 SQL）
+    queries_py = read(os.path.join(ROOT, "app", "api", "routes_queries.py"))
+    ledger_py = read(os.path.join(ROOT, "app", "repositories", "ledger.py"))
+    check("列表接口支持 q（关键字）", 'q: Optional[str] = Query' in queries_py)
+    check("排序走白名单常量", "PIPELINE_SORTS" in ledger_py and "TASK_SORTS" in ledger_py)
+    check("非法排序抛 ValueError（→422）", "非法排序" in ledger_py)
+
+    # 1.9b 前端契约：列表搜索/排序 + 行差量渲染
+    html = read(os.path.join(ROOT, "app", "static", "index.html"))
+    app_js = read(os.path.join(ROOT, "app", "static", "app.js"))
+    check("看板有搜索框与排序下拉", 'id="pipeSearch"' in html and 'id="pipeSort"' in html)
+    check("列表请求带 q 与 sort", 'query.set("q", state.q)' in app_js and 'query.set("sort", state.sort)' in app_js)
+    check("行级差量渲染（listRows/taskRows）", "const listRows" in app_js and "const taskRows" in app_js)
+
+    # 1.10 JS 语法（有 node 才查；无 node 不算失败，但要留痕）
+    js_path = os.path.join(ROOT, "app", "static", "app.js")
+    node = shutil_which("node")
+    if node:
+        proc = subprocess.run(
+            [node, "--check", js_path],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        check("JS 语法（node --check）", proc.returncode == 0, (proc.stderr or "").strip()[:120])
+    else:
+        print("  [PASS] JS 语法（跳过：本机没有 node）")
 
 
 def migrate_cli(args, db_url):

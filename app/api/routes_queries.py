@@ -56,25 +56,32 @@ def _summary(pipeline) -> PipelineSummary:
 @router.get(
     "/pipelines",
     response_model=PipelineSummaryPage,
-    summary="流水线列表（分页 + 状态/起始时间筛选）",
+    summary="流水线列表（分页 + 状态/时间/关键字筛选 + 排序）",
     description=(
         "只读查询。status 只接受 pending/running/success/aborted/failed；"
-        "start_from / start_to 为带时区的 ISO 时间，按 start_time 过滤。"
+        "start_from / start_to 为带时区的 ISO 时间，按 start_time 过滤；"
+        "q 在 trace_id 与原始需求里做子串匹配；"
+        "sort 只接受 start_time_desc（默认）/ start_time_asc。"
     ),
 )
 def list_pipelines(
     status: Optional[str] = Query(default=None, description="流水线状态白名单值"),
     start_from: Optional[datetime] = Query(default=None, description="起始时间下界（含）"),
     start_to: Optional[datetime] = Query(default=None, description="起始时间上界（含）"),
+    q: Optional[str] = Query(default=None, max_length=128, description="关键字（trace_id / 原始需求子串）"),
+    sort: str = Query(default="start_time_desc", description="排序：start_time_desc / start_time_asc"),
     page: int = Query(default=1, description="页码，从 1 开始"),
     size: Optional[int] = Query(default=None, description="每页条数，默认取配置值"),
     db: Session = Depends(get_db),
 ) -> PipelineSummaryPage:
     page, size = _normalize_page(page, size or get_settings().page_size_default)
     repo = LedgerRepository(db)
+    keyword = (q or "").strip() or None
     try:
-        total = repo.count_pipelines(status, start_from, start_to)
-        items = repo.list_pipelines(status, start_from, start_to, limit=size, offset=(page - 1) * size)
+        total = repo.count_pipelines(status, start_from, start_to, keyword)
+        items = repo.list_pipelines(
+            status, start_from, start_to, keyword, sort, limit=size, offset=(page - 1) * size
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return PipelineSummaryPage(
@@ -86,22 +93,27 @@ def list_pipelines(
 @router.get(
     "/tasks",
     response_model=TaskPage,
-    summary="任务列表（分页 + trace/状态/执行方筛选）",
-    description="只读查询。status 只接受 7 个中文任务状态。",
+    summary="任务列表（分页 + trace/状态/执行方/关键字筛选 + 排序）",
+    description="只读查询。status 只接受 7 个中文任务状态；q 在 task_id 里做子串匹配；sort 只接受 task_id_asc（默认）/ task_id_desc。",
 )
 def list_tasks(
     trace_id: Optional[str] = Query(default=None),
     status: Optional[str] = Query(default=None),
     target_worker: Optional[str] = Query(default=None),
+    q: Optional[str] = Query(default=None, max_length=128),
+    sort: str = Query(default="task_id_asc"),
     page: int = Query(default=1),
     size: Optional[int] = Query(default=None),
     db: Session = Depends(get_db),
 ) -> TaskPage:
     page, size = _normalize_page(page, size or get_settings().page_size_default)
     repo = LedgerRepository(db)
+    keyword = (q or "").strip() or None
     try:
-        total = repo.count_tasks(trace_id, status, target_worker)
-        items = repo.search_tasks(trace_id, status, target_worker, limit=size, offset=(page - 1) * size)
+        total = repo.count_tasks(trace_id, status, target_worker, keyword)
+        items = repo.search_tasks(
+            trace_id, status, target_worker, keyword, sort, limit=size, offset=(page - 1) * size
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return TaskPage(
