@@ -25,6 +25,11 @@ ROOT = os.path.dirname(HERE)
 PY = sys.executable
 shutil_which = shutil.which
 
+# 直接 `python scripts/ci.py`（不设 PYTHONPATH）时也能 import app / migrations。
+# 本地一直靠 PYTHONPATH 遮着，一上 CI 就报了 ModuleNotFoundError: migrations —— 这条就是补丁。
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
 FAILS = []
 
 # 底座必须业务无关：这些词不许出现在应用代码、迁移与底座文档里

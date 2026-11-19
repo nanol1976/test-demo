@@ -14,6 +14,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 PY = sys.executable
 
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
 SCRIPTS = [
     ("Batch2 消息总线", "verify_b2.py"),
     ("Batch3 查询/导出/鉴权", "verify_b3.py"),

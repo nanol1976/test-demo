@@ -9,6 +9,10 @@ on:
 jobs:
   gate:
     runs-on: ubuntu-latest
+    env:
+      # 双保险：脚本内部已经把 ROOT 插进 sys.path，这里再把仓库根作为 PYTHONPATH，
+      # 防止将来新增脚本忘了引导、在 CI 上炸 ModuleNotFoundError。
+      PYTHONPATH: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
 
