@@ -16,6 +16,7 @@ from app.api.schemas_http import ArchiveView, ErrorBody, MessageAccepted, Pipeli
 from app.bus import BusBackpressureError, BusTimeoutError, MessageBus
 from app.bus.router import HandlerResult, Router, UnknownMsgTypeError, VALID_MSG_TYPES
 from app.core.logging import get_logger
+from app.core.security import require_token
 from app.models import MessageArchive
 from app.repositories.ledger import LedgerRepository
 from app.schemas import Envelope
@@ -24,7 +25,7 @@ from app.services.dispatch import IllegalTransitionError, TaskNotFoundError, reg
 
 logger = get_logger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_token)])
 
 _bus: Optional[MessageBus] = None
 _msg_router: Optional[Router] = None
@@ -87,6 +88,15 @@ def _task_view(task) -> TaskView:
     "/messages",
     response_model=MessageAccepted,
     status_code=202,
+    summary="投递一条协议 v1.0 报文",
+    description=(
+        "幂等键：`(trace_id, task_id, msg_type, timestamp)`。同一条报文重复投递返回同一个 "
+        "`archive_id`，不会重复写归档、不会重复推进状态。\n\n"
+        "状态码：202 已受理 / 400 未知 msg_type / 422 字段或 payload 校验失败 "
+        "（含 naive timestamp）/ 409 当前状态不接受该报文 / 404 引用的任务或流水线不存在 / "
+        "503 总线背压（消息未被接收，可重投）/ 500 台账写入失败。\n\n"
+        "鉴权：配置了 `API_TOKEN` 时需带 `X-API-Token` 头，否则 401。"
+    ),
     responses={400: {"model": ErrorBody}, 409: {"model": ErrorBody}, 422: {"model": ErrorBody}},
 )
 def post_message(raw: Dict[str, Any] = Body(...)) -> MessageAccepted:

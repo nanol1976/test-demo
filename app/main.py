@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api import health_router
-from app.api import routes_messages
+from app.api import routes_messages, routes_queries
 from app.bus import MessageBus
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
@@ -43,3 +43,4 @@ app = FastAPI(
 # 健康检查与报文接口
 app.include_router(health_router, prefix="/api", tags=["health"])
 app.include_router(routes_messages.router, prefix="/api", tags=["messages"])
+app.include_router(routes_queries.router, prefix="/api", tags=["ledger"])

@@ -4,7 +4,6 @@
 """
 from datetime import datetime
 from typing import List, Optional
-
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -61,6 +60,81 @@ class LedgerRepository:
         self.db.commit()
         self.db.refresh(row)
         return row
+
+    # ---- 只读查询（Batch3：分页 + 筛选，不含任何写操作）----
+    def list_pipelines(
+        self,
+        status: Optional[str] = None,
+        start_from: Optional[datetime] = None,
+        start_to: Optional[datetime] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> List[PipelineLedger]:
+        stmt = select(PipelineLedger)
+        if status:
+            if status not in PIPELINE_STATUSES:
+                raise ValueError(f"非法流水线状态: {status}")
+            stmt = stmt.where(PipelineLedger.overall_status == status)
+        if start_from is not None:
+            stmt = stmt.where(PipelineLedger.start_time >= start_from)
+        if start_to is not None:
+            stmt = stmt.where(PipelineLedger.start_time <= start_to)
+        stmt = stmt.order_by(PipelineLedger.start_time.desc()).limit(limit).offset(offset)
+        return list(self.db.execute(stmt).scalars().all())
+
+    def count_pipelines(
+        self,
+        status: Optional[str] = None,
+        start_from: Optional[datetime] = None,
+        start_to: Optional[datetime] = None,
+    ) -> int:
+        stmt = select(PipelineLedger)
+        if status:
+            if status not in PIPELINE_STATUSES:
+                raise ValueError(f"非法流水线状态: {status}")
+            stmt = stmt.where(PipelineLedger.overall_status == status)
+        if start_from is not None:
+            stmt = stmt.where(PipelineLedger.start_time >= start_from)
+        if start_to is not None:
+            stmt = stmt.where(PipelineLedger.start_time <= start_to)
+        return len(list(self.db.execute(stmt).scalars().all()))
+
+    def search_tasks(
+        self,
+        trace_id: Optional[str] = None,
+        status: Optional[str] = None,
+        target_worker: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> List[TaskLedger]:
+        stmt = select(TaskLedger)
+        if trace_id:
+            stmt = stmt.where(TaskLedger.trace_id == trace_id)
+        if status:
+            if status not in TASK_STATUSES:
+                raise ValueError(f"非法任务状态: {status}")
+            stmt = stmt.where(TaskLedger.status == status)
+        if target_worker:
+            stmt = stmt.where(TaskLedger.target_worker == target_worker)
+        stmt = stmt.order_by(TaskLedger.task_id).limit(limit).offset(offset)
+        return list(self.db.execute(stmt).scalars().all())
+
+    def count_tasks(
+        self,
+        trace_id: Optional[str] = None,
+        status: Optional[str] = None,
+        target_worker: Optional[str] = None,
+    ) -> int:
+        stmt = select(TaskLedger)
+        if trace_id:
+            stmt = stmt.where(TaskLedger.trace_id == trace_id)
+        if status:
+            if status not in TASK_STATUSES:
+                raise ValueError(f"非法任务状态: {status}")
+            stmt = stmt.where(TaskLedger.status == status)
+        if target_worker:
+            stmt = stmt.where(TaskLedger.target_worker == target_worker)
+        return len(list(self.db.execute(stmt).scalars().all()))
 
     # ---- 子任务台账 ----
     def create_task(

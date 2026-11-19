@@ -44,3 +44,38 @@ class ErrorBody(BaseModel):
     code: str
     message: str
     detail: Optional[str] = None
+
+
+class PageMeta(BaseModel):
+    total: int
+    page: int
+    size: int
+    pages: int
+
+
+class PipelineSummary(BaseModel):
+    trace_id: str
+    original_demand: str
+    overall_status: str
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    pause_flag: bool
+
+
+class PipelineSummaryPage(BaseModel):
+    meta: PageMeta
+    items: List[PipelineSummary] = Field(default_factory=list)
+
+
+class TaskPage(BaseModel):
+    meta: PageMeta
+    items: List[TaskView] = Field(default_factory=list)
+
+
+class ExportPayload(BaseModel):
+    trace_id: str
+    original_demand: str
+    overall_status: str
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    tasks: List[TaskView] = Field(default_factory=list)

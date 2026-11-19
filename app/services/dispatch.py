@@ -106,6 +106,15 @@ def _require_status(task: Any, allowed: set, action: str) -> None:
         )
 
 
+def _require_same_trace(task: Any, envelope: Envelope, action: str) -> None:
+    """报文里的 trace_id 必须与任务已归属的 trace 一致，否则拒绝。"""
+    if task.trace_id != envelope.trace_id:
+        raise IllegalTransitionError(
+            f"{action} 非法：任务 {task.task_id} 属于 trace {task.trace_id}，"
+            f"报文 trace 为 {envelope.trace_id}"
+        )
+
+
 # ---------------------------------------------------------------- 各 msg_type
 
 @_idempotent
@@ -149,7 +158,8 @@ def handle_task_dispatch(db: Session, envelope: Envelope) -> HandlerResult:
 @_idempotent
 def handle_task_heartbeat(db: Session, envelope: Envelope) -> HandlerResult:
     repo = LedgerRepository(db)
-    _require_task(repo, envelope.task_id, "task_heartbeat")
+    task = _require_task(repo, envelope.task_id, "task_heartbeat")
+    _require_same_trace(task, envelope, "task_heartbeat")
     archive_id = archive_message(db, envelope)
     return HandlerResult(archive_id, False, "心跳已记录（不改状态，超时判定属 Batch4）")
 
@@ -158,6 +168,7 @@ def handle_task_heartbeat(db: Session, envelope: Envelope) -> HandlerResult:
 def handle_task_return(db: Session, envelope: Envelope) -> HandlerResult:
     repo = LedgerRepository(db)
     task = _require_task(repo, envelope.task_id, "task_return")
+    _require_same_trace(task, envelope, "task_return")
     _require_status(task, TASK_RETURN_FROM, "task_return")
 
     archive_id = archive_message(db, envelope)
@@ -170,6 +181,7 @@ def handle_task_return(db: Session, envelope: Envelope) -> HandlerResult:
 def handle_task_reject(db: Session, envelope: Envelope) -> HandlerResult:
     repo = LedgerRepository(db)
     task = _require_task(repo, envelope.task_id, "task_reject")
+    _require_same_trace(task, envelope, "task_reject")
     _require_status(task, TASK_REJECT_FROM, "task_reject")
 
     reason = (envelope.payload or {}).get("reason") or "（未提供驳回原因）"
@@ -185,7 +197,8 @@ def handle_task_reject(db: Session, envelope: Envelope) -> HandlerResult:
 @_idempotent
 def handle_task_abort(db: Session, envelope: Envelope) -> HandlerResult:
     repo = LedgerRepository(db)
-    _require_task(repo, envelope.task_id, "task_abort")
+    task = _require_task(repo, envelope.task_id, "task_abort")
+    _require_same_trace(task, envelope, "task_abort")
 
     reason = (envelope.payload or {}).get("reason") or "（未提供中止原因）"
     archive_id = archive_message(db, envelope)
@@ -242,4 +255,5 @@ def register_all(router: Router) -> None:
     """把 8 种 msg_type 全部挂上处理器。少一种都算本批未完成。"""
     for msg_type, handler in HANDLERS.items():
         router.register(msg_type, handler)
+
 

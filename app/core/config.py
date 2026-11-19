@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     bus_capacity: int = 1000
     bus_workers: int = 2
+    api_token: str = ""
+    page_size_default: int = 20
+    page_size_max: int = 100
 
     class Config:
         env_file = ".env"
