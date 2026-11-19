@@ -12,6 +12,7 @@
 
 退出码：0 全绿 / 1 有失败。
 """
+import importlib.util
 import os
 import py_compile
 import re
@@ -114,6 +115,36 @@ def stage_static():
         except py_compile.PyCompileError as e:
             bad.append(f"{os.path.relpath(path, ROOT)}: {e.msg.splitlines()[0] if e.msg else e}")
     check(f"语法编译（{total} 个 .py）", not bad, "; ".join(bad[:3]))
+
+    # 1.1b 依赖齐备（requirements.txt 里声明过的，必须真能 import）
+    # 历史上 httpx 就是本地手动装着、requirements 没写，CI 清环境一装就红。
+    need = {
+        "fastapi": "fastapi",
+        "uvicorn": "uvicorn",
+        "sqlalchemy": "sqlalchemy",
+        "pydantic": "pydantic",
+        "pydantic-settings": "pydantic_settings",
+        "python-dotenv": "dotenv",
+        "alembic": "alembic",
+        "httpx": "httpx",
+    }
+    req_text = ""
+    req_path = os.path.join(ROOT, "requirements.txt")
+    if os.path.exists(req_path):
+        with open(req_path, encoding="utf-8") as f:
+            req_text = f.read()
+    declared = {
+        ln.split("==")[0].split(">=")[0].strip()
+        for ln in req_text.splitlines()
+        if ln.strip() and not ln.strip().startswith("#")
+    }
+    missing_dep = [pkg for pkg in need if pkg not in declared]
+    broken_dep = [mod for mod in need.values() if importlib.util.find_spec(mod) is None]
+    check(
+        "依赖齐备（requirements 声明齐全且可 import）",
+        not missing_dep and not broken_dep,
+        f"未声明：{missing_dep} 未安装：{broken_dep}",
+    )
 
     # 1.2 业务词（只扫代码与迁移；docs/base 里出现业务词是刻意的——那是在写"平台不做什么"的边界示例）
     hits = []
