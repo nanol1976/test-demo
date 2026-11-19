@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Master-Worker 台账看板</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Master-Worker 台账看板</h1>
+  <span class="muted" id="healthBadge">连接检查中</span>
+  <span class="spacer"></span>
+  <div class="token-box">
+    <label class="muted" for="tokenInput">X-API-Token</label>
+    <input id="tokenInput" type="password" placeholder="未配置可留空" autocomplete="off">
+    <button class="ghost" id="saveToken">记住</button>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div class="panel">
+      <h2>流水线<span class="count" id="pipeCount"></span></h2>
+      <div class="toolbar">
+        <select id="pipeStatus">
+          <option value="">全部状态</option>
+          <option value="pending">pending</option>
+          <option value="running">running</option>
+          <option value="success">success</option>
+          <option value="aborted">aborted</option>
+          <option value="failed">failed</option>
+        </select>
+        <button id="reloadPipes">刷新</button>
+        <span class="muted">点一行看详情</span>
+      </div>
+      <div id="pipeTableWrap"><div class="empty">加载中…</div></div>
+      <div class="pager">
+        <button class="ghost" id="pipePrev">上一页</button>
+        <span class="muted" id="pipePageInfo"></span>
+        <button class="ghost" id="pipeNext">下一页</button>
+      </div>
+    </div>
+
+    <div class="panel" id="detailPanel" hidden>
+      <h2>流水线详情 <span class="count mono" id="detailTrace"></span></h2>
+      <dl class="kv" id="detailKv"></dl>
+      <div class="toolbar" style="margin-top:12px">
+        <button id="btnPause">暂停派发</button>
+        <button id="btnResume">恢复派发</button>
+        <button id="btnClearBreaker">复位熔断</button>
+        <span class="spacer"></span>
+        <a id="exportJson" class="muted" href="#" target="_blank">导出 JSON</a>
+        <a id="exportCsv" class="muted" href="#" target="_blank">导出 CSV</a>
+      </div>
+      <div id="cmdResult"></div>
+      <h2 style="margin-top:16px">任务<span class="count" id="taskCount"></span></h2>
+      <div id="taskTableWrap"><div class="empty">未选择流水线</div></div>
+    </div>
+  </section>
+
+  <aside>
+    <div class="panel">
+      <h2>报文投递</h2>
+      <p class="hint">协议 v1.0，必须带 trace_id / task_id / msg_type / sender / timestamp / version。</p>
+      <div class="toolbar">
+        <select id="tmplSelect">
+          <option value="">选择模板…</option>
+          <option value="task_dispatch">task_dispatch</option>
+          <option value="task_heartbeat">task_heartbeat</option>
+          <option value="task_return">task_return</option>
+          <option value="task_reject">task_reject</option>
+          <option value="task_abort">task_abort</option>
+          <option value="human_confirm_req">human_confirm_req</option>
+          <option value="human_confirm_resp">human_confirm_resp</option>
+          <option value="task_summary">task_summary</option>
+        </select>
+        <button class="ghost" id="fillTmpl">填入</button>
+      </div>
+      <textarea id="msgBody" spellcheck="false"></textarea>
+      <div class="toolbar" style="margin-top:8px">
+        <button class="primary" id="sendMsg">投递</button>
+        <button class="ghost" id="fmtMsg">格式化</button>
+      </div>
+      <div id="msgResult"></div>
+    </div>
+
+    <div class="panel">
+      <h2>报文归档</h2>
+      <div class="toolbar">
+        <input id="archiveTrace" placeholder="trace_id" style="flex:1">
+        <button class="ghost" id="queryArchive">查询</button>
+      </div>
+      <div id="archiveResult"><div class="empty">查一条流水线的归档情况</div></div>
+    </div>
+  </aside>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

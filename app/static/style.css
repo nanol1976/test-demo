@@ -1,0 +1,75 @@
+/* Batch5 极简前端样式。无框架、无构建、单文件即可跑。 */
+:root {
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --line: #e3e6ec;
+  --text: #1f2430;
+  --muted: #7a8194;
+  --accent: #2f6feb;
+  --ok: #1f9d55;
+  --warn: #c77700;
+  --bad: #d1382a;
+  --idle: #7a8194;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+}
+header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 20px; background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 10;
+}
+header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+header .spacer { flex: 1; }
+.token-box { display: flex; align-items: center; gap: 6px; }
+.token-box input { width: 180px; }
+input, select, textarea, button {
+  font: inherit; color: inherit;
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 6px 10px; background: #fff;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button.ghost { background: transparent; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+main { display: grid; grid-template-columns: 1fr 380px; gap: 16px; padding: 16px 20px; }
+@media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+.panel {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 14px 16px; margin-bottom: 16px;
+}
+.panel h2 { font-size: 14px; margin: 0 0 10px; font-weight: 600; }
+.panel h2 .count { color: var(--muted); font-weight: 400; margin-left: 6px; }
+.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; white-space: nowrap; }
+tr.clickable:hover { background: #f0f4ff; cursor: pointer; }
+tr.selected { background: #e8efff; }
+.tag {
+  display: inline-block; padding: 1px 8px; border-radius: 10px;
+  font-size: 12px; color: #fff; white-space: nowrap;
+}
+.tag.ok { background: var(--ok); }
+.tag.bad { background: var(--bad); }
+.tag.warn { background: var(--warn); }
+.tag.info { background: var(--accent); }
+.tag.idle { background: var(--idle); }
+.mono { font-family: Consolas, "Courier New", monospace; font-size: 12px; }
+.muted { color: var(--muted); }
+.empty { color: var(--muted); padding: 12px 0; }
+.pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 10px; }
+.kv { display: grid; grid-template-columns: 96px 1fr; gap: 4px 10px; font-size: 13px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; word-break: break-all; }
+textarea { width: 100%; min-height: 200px; font-family: Consolas, monospace; font-size: 12px; }
+.result { margin-top: 10px; padding: 8px 10px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+.result.ok { background: #eaf7ef; border: 1px solid #bfe6cd; }
+.result.err { background: #fdecea; border: 1px solid #f5c6c0; }
+.hint { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
