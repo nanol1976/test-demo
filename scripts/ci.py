@@ -64,6 +64,14 @@ EXPECTED_TASK_STATES = [
 ]
 
 
+def tail_of(out, n=3, width=160):
+    """失败时把子进程输出的最后几行带出来，省得 CI 只报一个 exit=1 无从下手。"""
+    lines = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    return " | " + " / ".join(ln[:width] for ln in lines[-n:])
+
+
 def check(label, ok, detail=""):
     print(f"  [{'PASS' if ok else 'FAIL'}] {label}" + (f" — {detail}" if detail else ""))
     if not ok:
@@ -222,7 +230,11 @@ def stage_migrate():
     print("2) 迁移门禁（三段式）")
     print("=" * 60)
     db_name = "ci_migrate.db"
-    db_path = os.path.join(ROOT, "data", db_name)
+    data_dir = os.path.join(ROOT, "data")
+    # 干净 clone / CI 里没有 data/（目录不进仓库），不先建出来 sqlite 会
+    # "unable to open database file"，迁移门禁会假红。
+    os.makedirs(data_dir, exist_ok=True)
+    db_path = os.path.join(data_dir, db_name)
     if os.path.exists(db_path):
         os.remove(db_path)
     url = f"sqlite:///./data/{db_name}"
@@ -231,13 +243,13 @@ def stage_migrate():
     check("空库 --check 必须不通过", code == 1, f"exit={code}")
 
     code, out = migrate_cli([], url)
-    check("upgrade 必须成功", code == 0, f"exit={code}")
+    check("upgrade 必须成功", code == 0, f"exit={code}" + tail_of(out))
 
     code, out = migrate_cli(["--check"], url)
-    check("升级后 --check 必须通过", code == 0, f"exit={code}")
+    check("升级后 --check 必须通过", code == 0, f"exit={code}" + tail_of(out))
 
     code, out = migrate_cli([], url)
-    check("重复 upgrade 幂等", code == 0 and "无待应用迁移" in out)
+    check("重复 upgrade 幂等", code == 0 and "无待应用迁移" in out, "" if code == 0 else tail_of(out))
 
     if os.path.exists(db_path):
         os.remove(db_path)

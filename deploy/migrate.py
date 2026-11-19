@@ -25,9 +25,25 @@ from app.models import Base  # noqa: E402
 from migrations import runner  # noqa: E402
 
 
+def ensure_sqlite_dir(url: str) -> None:
+    """sqlite 是在"文件不存在就新建"，但父目录不存在会直接报
+    `unable to open database file`。全新 clone / CI 里 data/ 不进仓库，
+    这里顺手补起来，免得迁移在干净环境里莫名失败。"""
+    prefix = "sqlite:///"
+    if not url.startswith(prefix):
+        return
+    db_path = url[len(prefix):]
+    if db_path in ("", ":memory:"):
+        return
+    parent = os.path.dirname(os.path.abspath(db_path))
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent, exist_ok=True)
+
+
 def connect():
     settings = get_settings()
     url = settings.database_url
+    ensure_sqlite_dir(url)
     return create_engine(url, future=True), url
 
 
