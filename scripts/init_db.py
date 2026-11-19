@@ -1,107 +1,52 @@
 #!/usr/bin/env python3
-"""Database initialization script.
-Creates tables and indexes for the Master-Worker Platform.
+"""建表脚本（仅结构，不写任何数据）。
+
+为什么没有 --demo：
+演示数据必须走 `POST /api/messages` 造——那样才会经过状态机、幂等、归档。
+绕过平台直接 INSERT 台账等于越权，而且会污染真实台账（早期版本有这个分支，已删除）。
 """
 import sys
-import argparse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sqlalchemy import create_engine, inspect
-from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import Base, PipelineLedger, TaskLedger, MessageArchive
+from app.models import Base
 
 
-def init_database(demo: bool = False):
+def init_database() -> bool:
     settings = get_settings()
     database_url = settings.database_url
-    
+
     if database_url.startswith("sqlite:///"):
         db_path = database_url.replace("sqlite:///", "")
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    
-    # Use settings.debug to control echo
+
     engine = create_engine(database_url, echo=settings.log_level == "DEBUG")
-    
     Base.metadata.create_all(engine)
-    
+
     inspector = inspect(engine)
     tables = inspector.get_table_names()
-    print(f"Created tables: {tables}")
-    
+    print(f"Tables: {tables}")
     for table in tables:
-        indexes = inspector.get_indexes(table)
-        print(f"Indexes for {table}: {indexes}")
-    
-    if demo:
-        with Session(engine) as session:
-            pipeline = PipelineLedger(
-                trace_id="test-trace-001",
-                original_demand="Test demand",
-                overall_status="pending"
-            )
-            session.add(pipeline)
-            session.commit()
-            print(f"Inserted PipelineLedger: {pipeline.trace_id}")
-            
-            task = TaskLedger(
-                task_id="test-task-001",
-                trace_id="test-trace-001",
-                target_worker="dsh",
-                status="待拆解",
-                max_retry=3,
-                remaining_retry=3,
-                is_high_risk=False,
-                depends_on=[]
-            )
-            session.add(task)
-            session.commit()
-            print(f"Inserted TaskLedger: {task.task_id}")
-            
-            from datetime import datetime, timezone
-            from app.schemas import Envelope
-
-            demo_envelope = Envelope(
-                trace_id="test-trace-001",
-                task_id="test-task-001",
-                msg_type="task_dispatch",
-                sender="master",
-                timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
-                payload={"task_goal": "demo", "is_high_risk": False},
-            )
-            archive = MessageArchive(
-                trace_id="test-trace-001",
-                task_id="test-task-001",
-                msg_type=demo_envelope.msg_type.value,
-                sender=demo_envelope.sender.value,
-                timestamp=demo_envelope.timestamp,
-                raw_json=demo_envelope.model_dump_json(),
-            )
-            session.add(archive)
-            session.commit()
-            print(f"Inserted MessageArchive: {archive.id}")
-            
-            pipelines = session.query(PipelineLedger).all()
-            tasks = session.query(TaskLedger).all()
-            archives = session.query(MessageArchive).all()
-            print(f"Pipelines: {len(pipelines)}, Tasks: {len(tasks)}, Archives: {len(archives)}")
-    
+        print(f"Indexes for {table}: {inspector.get_indexes(table)}")
     print("Database initialization completed successfully!")
     return True
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Initialize database")
-    parser.add_argument("--demo", action="store_true", help="Insert demo data (default: False)")
-    args = parser.parse_args()
-    
+    unknown = [a for a in sys.argv[1:] if a.startswith("-")]
+    if unknown:
+        print(f"不支持的参数：{unknown}")
+        print("本脚本只建表、不写数据。演示数据请走 POST /api/messages（经状态机与归档）。")
+        sys.exit(1)
     try:
-        init_database(demo=args.demo)
-    except Exception as e:
+        init_database()
+    except Exception as e:  # noqa: BLE001 - 建表失败要给出完整栈
         print(f"Error: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

@@ -1,8 +1,11 @@
-from pydantic_settings import BaseSettings
 from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
     database_url: str = "sqlite:///./data/mw_platform.db"
     archive_root: str = "./archive"
     log_level: str = "INFO"
@@ -16,10 +19,6 @@ class Settings(BaseSettings):
     heartbeat_timeout_seconds: int = 120
     failure_threshold: int = 3
     scan_interval_seconds: float = 5.0
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
 
 
 @lru_cache
