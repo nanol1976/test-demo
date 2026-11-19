@@ -1,0 +1,36 @@
+#!/bin/sh
+# 分支职责守卫：拦住"把代码分支推到文档分支"这类覆盖事故。
+# 约定（2026-11-19 定）：master = 代码分支（默认），main = 文档分支。
+# git 会在推送前调用本脚本，参数：$1=remote 名 $2=remote URL，stdin 每行一条 refspec。
+# 确需覆盖时显式放行：ALLOW_OVERWRITE_MAIN=1 git push --force origin master:main
+
+zero=0000000000000000000000000000000000000000
+status=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -z "$remote_ref" ] && continue
+  # 删除远端分支不拦（那是有意为之的操作）
+  if [ "$local_sha" = "$zero" ]; then
+    continue
+  fi
+  if [ "$remote_ref" = "refs/heads/main" ]; then
+    case "$local_ref" in
+      refs/heads/docs|refs/heads/main) : ;;
+      *)
+        if [ "${ALLOW_OVERWRITE_MAIN:-0}" = "1" ]; then
+          echo "[pre-push] 放行覆盖 main（ALLOW_OVERWRITE_MAIN=1）：$local_ref -> $remote_ref"
+        else
+          echo ""
+          echo "[pre-push] 已拦下：$local_ref -> $remote_ref"
+          echo "  main 是文档分支，只能从 docs 分支推送文档。"
+          echo "  正确做法：git checkout docs && git merge --ff-only origin/main && <改文档> && git push origin docs:main"
+          echo "  确实要覆盖（例如整仓重建）：ALLOW_OVERWRITE_MAIN=1 git push --force origin $local_ref:main"
+          echo ""
+          status=1
+        fi
+        ;;
+    esac
+  fi
+done
+
+exit $status

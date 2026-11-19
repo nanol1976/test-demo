@@ -135,6 +135,31 @@ CI 门禁查什么：
 mv data data_bak 2>/dev/null; unset PYTHONPATH; python scripts/ci.py; mv data_bak data 2>/dev/null
 ```
 
+## 分支约定（代码在 master，文档在 main）
+
+| 分支 | 用途 | 内容 | CI |
+| --- | --- | --- | --- |
+| `master`（默认） | 代码分支 | `app/ deploy/ migrations/ scripts/ .github/workflows/` + 依赖 + 测试 | 推送即跑门禁 |
+| `main` | 文档分支 | `README.md`（文档索引）+ `docs/` | 无 workflow，不跑 |
+
+**改文档不要从 `master` 推 `main`** —— 那会把文档分支整条覆盖成代码：
+
+```bash
+git checkout docs                                   # 跟 origin/main 同源的文档分支
+git merge --ff-only origin/main                     # 先对齐远端
+# 改 README.md 或 docs/ ...
+git commit -am "docs: xxx"
+git push origin docs:main
+```
+
+仓库自带一道 `pre-push` 守卫（`.githooks/pre-push`，已设 `core.hooksPath=.githooks`）：只要把非 `docs`/`main` 的分支往 `refs/heads/main` 推，会被直接拦下并打出正确姿势。确需覆盖时的显式放行开关：
+
+```bash
+ALLOW_OVERWRITE_MAIN=1 git push --force origin master:main
+```
+
+新克隆的仓库没有 `core.hooksPath`，需要执行一次 `git config core.hooksPath .githooks` 才有这道守卫。
+
 ## 看板
 
 - 自动刷新：列表工具栏可选 关 / 5s / 15s / 30s，间隔记在 localStorage；页面切到后台自动暂停（`visibilitychange`）。
