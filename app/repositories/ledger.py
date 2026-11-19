@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import PipelineLedger, TaskLedger
@@ -24,13 +25,24 @@ class LedgerRepository:
 
     # ---- 流水线台账 ----
     def create_pipeline(self, trace_id: str, original_demand: str) -> PipelineLedger:
+        """get-or-create：并发下同一 trace 只应有一条流水线。"""
+        existing = self.db.get(PipelineLedger, trace_id)
+        if existing is not None:
+            return existing
         row = PipelineLedger(
             trace_id=trace_id,
             original_demand=original_demand,
             overall_status="pending",
         )
         self.db.add(row)
-        self.db.commit()
+        try:
+            self.db.commit()
+        except IntegrityError:
+            self.db.rollback()
+            existing = self.db.get(PipelineLedger, trace_id)
+            if existing is None:
+                raise
+            return existing
         self.db.refresh(row)
         return row
 
@@ -74,7 +86,15 @@ class LedgerRepository:
             depends_on=list(depends_on or []),
         )
         self.db.add(row)
-        self.db.commit()
+        try:
+            self.db.commit()
+        except IntegrityError:
+            # 并发重复建同一任务：回退为已存在记录，绝不覆盖
+            self.db.rollback()
+            existing = self.db.get(TaskLedger, task_id)
+            if existing is None:
+                raise
+            return existing
         self.db.refresh(row)
         return row
 

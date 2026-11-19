@@ -1,0 +1,245 @@
+"""状态迁移编排（Batch2）。
+
+边界：
+- 只按报文的 msg_type 做状态迁移与台账记录；
+- 不做 DAG 拆解、不做验收判定、不做审批决策、不做超时控制；
+- 所有写操作一律走 LedgerRepository，禁止在这里写 SQL 或自建 Session。
+"""
+from datetime import datetime
+from typing import Any, Dict, Optional
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.bus.router import HandlerResult, Router
+from app.core.logging import get_logger
+from app.models import MessageArchive
+from app.repositories.ledger import PIPELINE_STATUSES, LedgerRepository
+from app.schemas import Envelope, MsgType
+from app.services import ArchiveService
+
+logger = get_logger(__name__)
+
+# 迁移白名单：msg_type -> 允许的源状态
+TASK_RETURN_FROM = {"执行中"}
+TASK_REJECT_FROM = {"待验收"}
+TASK_DISPATCH_FROM = {"待调度下发"}
+
+
+class IllegalTransitionError(Exception):
+    """当前状态不接受该报文（409）。"""
+
+
+class TaskNotFoundError(Exception):
+    """报文中引用的任务不存在（404）。"""
+
+
+# ---------------------------------------------------------------- 归档（幂等）
+
+def archive_message(db: Session, envelope: Envelope) -> int:
+    """写归档并返回 archive_id。
+
+    顺序固定：先写 JSONL，再写索引行。
+    同一 (trace_id, task_id, msg_type, timestamp) 重复投递按幂等处理：
+    返回既有 archive_id，不再追加 JSONL、不报错。
+    """
+    existing = _find_archive(db, envelope)
+    if existing is not None:
+        return existing.id
+
+    service = ArchiveService(db)
+    try:
+        record = service.append_archive(envelope.trace_id, envelope.task_id, envelope)
+        return record.id
+    except IntegrityError:
+        # 并发下同一条报文撞了唯一约束：按幂等处理，不回滚已落盘的 JSONL
+        db.rollback()
+        row = _find_archive(db, envelope)
+        if row is None:
+            raise
+        return row.id
+
+
+def _find_archive(db: Session, envelope: Envelope) -> Optional[MessageArchive]:
+    stmt = select(MessageArchive).where(
+        MessageArchive.trace_id == envelope.trace_id,
+        MessageArchive.task_id == envelope.task_id,
+        MessageArchive.msg_type == envelope.msg_type.value,
+        MessageArchive.timestamp == envelope.timestamp,
+    )
+    return db.execute(stmt).scalars().first()
+
+
+# ---------------------------------------------------------------- 幂等前置
+
+def _idempotent(func):
+    """同一 (trace_id, task_id, msg_type, timestamp) 已归档 → 直接返回，不再推进状态。
+
+    顺序很重要：幂等判定必须在状态校验之前，否则重复投递会被误判成非法迁移（409）。
+    """
+
+    def wrapper(db: Session, envelope: Envelope) -> HandlerResult:
+        existing = _find_archive(db, envelope)
+        if existing is not None:
+            return HandlerResult(existing.id, False, "重复报文，已忽略（幂等）")
+        return func(db, envelope)
+
+    wrapper.__name__ = func.__name__
+    wrapper.__doc__ = func.__doc__
+    return wrapper
+
+
+# ---------------------------------------------------------------- 迁移校验
+
+def _require_task(repo: LedgerRepository, task_id: str, action: str) -> Any:
+    task = repo.get_task(task_id)
+    if task is None:
+        raise TaskNotFoundError(f"{action} 失败：任务不存在 {task_id}")
+    return task
+
+
+def _require_status(task: Any, allowed: set, action: str) -> None:
+    if task.status not in allowed:
+        raise IllegalTransitionError(
+            f"{action} 非法迁移：当前状态「{task.status}」，仅接受 {sorted(allowed)}"
+        )
+
+
+# ---------------------------------------------------------------- 各 msg_type
+
+@_idempotent
+def handle_task_dispatch(db: Session, envelope: Envelope) -> HandlerResult:
+    payload: Dict[str, Any] = envelope.payload or {}
+    repo = LedgerRepository(db)
+
+    pipeline = repo.get_pipeline(envelope.trace_id)
+    if pipeline is None:
+        pipeline = repo.create_pipeline(
+            envelope.trace_id, payload.get("task_goal") or "（未提供 task_goal）"
+        )
+
+    task = repo.get_task(envelope.task_id)
+    if task is None:
+        # 首次派发：按报文建任务，落到「待调度下发」后再转执行中
+        repo.create_task(
+            trace_id=envelope.trace_id,
+            task_id=envelope.task_id,
+            target_worker=envelope.sender.value,
+            depends_on=payload.get("depends_on"),
+            max_retry=int(payload.get("max_retry", 3)),
+            is_high_risk=bool(payload.get("is_high_risk", False)),
+            status="待调度下发",
+        )
+        task = repo.get_task(envelope.task_id)
+    else:
+        _require_status(task, TASK_DISPATCH_FROM, "task_dispatch")
+
+    if task.trace_id != envelope.trace_id:
+        raise IllegalTransitionError(
+            f"task_dispatch 非法：任务 {task.task_id} 已属于 trace {task.trace_id}"
+        )
+
+    archive_id = archive_message(db, envelope)
+    repo.mark_dispatch_time(envelope.task_id, envelope.timestamp)
+    repo.update_task_status(envelope.task_id, "执行中")
+    return HandlerResult(archive_id, True, "任务已下发，状态：执行中")
+
+
+@_idempotent
+def handle_task_heartbeat(db: Session, envelope: Envelope) -> HandlerResult:
+    repo = LedgerRepository(db)
+    _require_task(repo, envelope.task_id, "task_heartbeat")
+    archive_id = archive_message(db, envelope)
+    return HandlerResult(archive_id, False, "心跳已记录（不改状态，超时判定属 Batch4）")
+
+
+@_idempotent
+def handle_task_return(db: Session, envelope: Envelope) -> HandlerResult:
+    repo = LedgerRepository(db)
+    task = _require_task(repo, envelope.task_id, "task_return")
+    _require_status(task, TASK_RETURN_FROM, "task_return")
+
+    archive_id = archive_message(db, envelope)
+    repo.mark_return_time(envelope.task_id, envelope.timestamp)
+    repo.update_task_status(envelope.task_id, "待验收")
+    return HandlerResult(archive_id, True, "任务已回传，状态：待验收")
+
+
+@_idempotent
+def handle_task_reject(db: Session, envelope: Envelope) -> HandlerResult:
+    repo = LedgerRepository(db)
+    task = _require_task(repo, envelope.task_id, "task_reject")
+    _require_status(task, TASK_REJECT_FROM, "task_reject")
+
+    reason = (envelope.payload or {}).get("reason") or "（未提供驳回原因）"
+    archive_id = archive_message(db, envelope)
+    repo.record_reject(envelope.task_id, reason)
+    repo.update_task_status(envelope.task_id, "验收驳回")
+    remaining = repo.get_task(envelope.task_id).remaining_retry
+    return HandlerResult(
+        archive_id, True, f"已驳回并扣减重试次数，剩余重试 {remaining} 次（重派由 Master 决定）"
+    )
+
+
+@_idempotent
+def handle_task_abort(db: Session, envelope: Envelope) -> HandlerResult:
+    repo = LedgerRepository(db)
+    _require_task(repo, envelope.task_id, "task_abort")
+
+    reason = (envelope.payload or {}).get("reason") or "（未提供中止原因）"
+    archive_id = archive_message(db, envelope)
+    repo.record_abort(envelope.task_id, reason)
+    repo.update_task_status(envelope.task_id, "执行失败")
+    repo.update_pipeline_status(envelope.trace_id, "aborted")
+    return HandlerResult(archive_id, True, "任务已中止，状态：执行失败；流水线：aborted")
+
+
+@_idempotent
+def handle_human_confirm_req(db: Session, envelope: Envelope) -> HandlerResult:
+    # 只留痕：高危卡点的审批决策属 Master，平台不做判断
+    archive_id = archive_message(db, envelope)
+    return HandlerResult(archive_id, False, "人工确认请求已记录（仅留痕，不推进状态）")
+
+
+@_idempotent
+def handle_human_confirm_resp(db: Session, envelope: Envelope) -> HandlerResult:
+    archive_id = archive_message(db, envelope)
+    return HandlerResult(archive_id, False, "人工确认答复已记录（仅留痕，不推进状态）")
+
+
+@_idempotent
+def handle_task_summary(db: Session, envelope: Envelope) -> HandlerResult:
+    repo = LedgerRepository(db)
+    pipeline = repo.get_pipeline(envelope.trace_id)
+    if pipeline is None:
+        raise TaskNotFoundError(f"task_summary 失败：流水线不存在 {envelope.trace_id}")
+
+    target_status = (envelope.payload or {}).get("pipeline_status")
+    if target_status not in PIPELINE_STATUSES:
+        raise IllegalTransitionError(f"task_summary 非法流水线状态：{target_status}")
+
+    archive_id = archive_message(db, envelope)
+    repo.update_pipeline_status(
+        envelope.trace_id, target_status, end_time=envelope.timestamp
+    )
+    return HandlerResult(archive_id, True, f"流水线状态已更新为 {target_status}")
+
+
+HANDLERS = {
+    MsgType.TASK_DISPATCH: handle_task_dispatch,
+    MsgType.TASK_HEARTBEAT: handle_task_heartbeat,
+    MsgType.TASK_RETURN: handle_task_return,
+    MsgType.TASK_REJECT: handle_task_reject,
+    MsgType.TASK_ABORT: handle_task_abort,
+    MsgType.HUMAN_CONFIRM_REQ: handle_human_confirm_req,
+    MsgType.HUMAN_CONFIRM_RESP: handle_human_confirm_resp,
+    MsgType.TASK_SUMMARY: handle_task_summary,
+}
+
+
+def register_all(router: Router) -> None:
+    """把 8 种 msg_type 全部挂上处理器。少一种都算本批未完成。"""
+    for msg_type, handler in HANDLERS.items():
+        router.register(msg_type, handler)
+
