@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Master-Worker Worker 守护配置（macOS / launchd）
+
+  用法：
+    1) 改 4 处路径与参数：ProgramArguments 里的脚本路径、base-url、worker-id、status-file
+    2) cp deploy/worker-launchd.plist ~/Library/LaunchAgents/com.nanol.mw-worker.plist
+    3) launchctl load -w ~/Library/LaunchAgents/com.nanol.mw-worker.plist
+    4) 看状态：launchctl list | grep mw-worker ；日志见 StandardOutPath
+
+  要点：
+    KeepAlive=true：进程退出即被拉起（Worker 无状态，靠平台台账恢复）
+    RunAtLoad=true：登录即启动
+    ExitTimeOut=90：停止时给 Worker 优雅退出的窗口（grace-seconds 30），超时才强杀
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nanol.mw-worker</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/python3</string>
+        <string>/Users/Shared/master-worker-platform/worker/agent_worker.py</string>
+        <string>--base-url</string>
+        <string>http://127.0.0.1:8000</string>
+        <string>--worker-id</string>
+        <string>workbuddy</string>
+        <string>--concurrency</string>
+        <string>2</string>
+        <string>--grace-seconds</string>
+        <string>30</string>
+        <string>--status-file</string>
+        <string>/Users/Shared/master-worker-platform/run/worker_status.json</string>
+        <string>--state-file</string>
+        <string>/Users/Shared/master-worker-platform/run/worker_done.json</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/Shared/master-worker-platform</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONPATH</key>
+        <string>/Users/Shared/master-worker-platform</string>
+        <key>MW_API_TOKEN</key>
+        <string></string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ExitTimeOut</key>
+    <integer>90</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/Shared/master-worker-platform/run/worker.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/Shared/master-worker-platform/run/worker.err.log</string>
+</dict>
+</plist>

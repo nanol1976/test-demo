@@ -54,8 +54,21 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 ```bash
 python worker/agent_worker.py --base-url http://127.0.0.1:8000 --worker-id workbuddy
-# 常驻；加 --once 处理一轮就退出（验收脚本用的就是这模式）
+# 常驻；--once 处理一轮就退出（验收脚本用的就是这模式）
+# 并发 2 个、优先 9 的活先领、收到 SIGTERM 等 30s 收尾、状态落盘：
+python worker/agent_worker.py --base-url http://127.0.0.1:8000 --worker-id workbuddy \
+  --concurrency 2 --grace-seconds 30 --status-file run/worker_status.json
 ```
+
+要交给系统托管（崩了自动拉起）用三份模板，改 4 处路径即可：
+
+| 平台 | 模板 | 关键行为 |
+| --- | --- | --- |
+| Linux | `deploy/worker-systemd.service` | `Restart=always`；`KillSignal=SIGTERM` + `TimeoutStopSec=90` |
+| macOS | `deploy/worker-launchd.plist` | `RunAtLoad` + `KeepAlive`；`ExitTimeOut=90` |
+| Windows | `deploy/worker-windows-task.ps1` | 计划任务开机启动；`MultipleInstances IgnoreNew`；失败每分钟重试 |
+
+`payload.priority`（数字，越大越先）由 Worker 本地排序，平台只搬运不排序。
 
 Worker 干什么由派发报文的 `payload.exec` 决定（白名单目录内的 `.py` + 参数 + 硬超时）：
 
@@ -116,7 +129,7 @@ python deploy/migrate.py --baseline 2 --force  # 已有版本记录时强制重�
 ## 测试与 CI
 
 ```bash
-python scripts/run_all.py            # 一键：verify_b2/b3/b4/b5/b7/b8/b9/b10 + 真实起服务冒烟
+python scripts/run_all.py            # 一键：verify_b2/b3/b4/b5/b7/b8/b9/b10/b11 + 真实起服务冒烟
 python scripts/run_all.py --no-smoke # 跳过冒烟
 python scripts/ci.py                 # CI 门禁：静态红线 + 迁移三段式 + 全量测试
 python scripts/ci.py --static-only   # 只跑静态门禁（快，本地提交前跑）
@@ -221,7 +234,7 @@ worker/         agent_worker.py（真 Worker：轮询/执行/心跳/回执）+ e
 deploy/         run.ps1 / run.sh / migrate.py
 migrations/     runner.py + versions/（版本化增量迁移）
 .github/        workflows/ci.yml（接仓库即可用）
-scripts/        init_db / verify_b2..b10 / run_all / smoke_http / ci
+scripts/        init_db / verify_b2..b11 / run_all / smoke_http / ci
 docs/           Batch 任务卡与验收单
 docs/base/      底座规范（架构·SOP·协议·状态机·契约·故障案例…）
 ```
@@ -242,7 +255,7 @@ docs/base/      底座规范（架构·SOP·协议·状态机·契约·故障案
 | 10 | `--baseline --force` 会清 `schema_version` | 只碰元数据表、需人工显式加参数，但仍属"删"，用前先备份 |
 | 11 | 依赖只在 `requirements.txt` 里声明 | 本地手工装的包一律不算，`ci.py` 第 1.1b 条门禁会拦 |
 | 12 | ~~越权强校验未做~~ | Batch10 已补：`sender` 必须等于 `task.target_worker`（越权 409 且不落归档）；重放按 sender+payload 指纹拦截；派发只允许 Master |
-| 13 | Worker 单进程串行处理 | 并发度与优先级需先定调度策略；当前一轮内的任务按列表顺序逐个跑 |
+| 13 | ~~Worker 单进程串行处理~~ | Batch11 已补：`--concurrency` 并发 + `payload.priority` 优先级 + 三平台守护模板；动态伸缩仍待定 |
 
 ## 台账铁律
 

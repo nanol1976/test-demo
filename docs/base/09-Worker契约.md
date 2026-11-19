@@ -133,6 +133,16 @@ POST /api/messages                                    # 报活 / 交活 / 报做
 `exec 规格不合法：脚本越界（不在允许目录内）：/tmp/x/escaping_task.py`、
 `执行失败（退出码 3）：boom: 故意失败`。
 
+## 六·补二 并发、优先级与停止（Batch11）
+
+| 项 | 口径 |
+| --- | --- |
+| 并发 | `--concurrency N` 同时执行 N 个任务；槽位满了就停止拉新活，不堆积 |
+| 优先级 | `payload.priority`（数字，越大越先）；同优先级按 `dispatch_time` 升序、再按 `task_id` 兜底。**平台只搬运不排序**，排序是实现方的事 |
+| 停止 | 收到 `SIGTERM`/`SIGINT` → 不再拉新活 → 等在跑任务收尾（`--grace-seconds`，默认 30）→ 退出 0。**不要在主流程里杀掉子进程**，否则任务会留在「执行中」等平台判超时 |
+| 被强杀 | `SIGKILL` 时任务留在「执行中」，由平台 `task_timeout_seconds` / `heartbeat_timeout_seconds` 处置；不会被伪造成成功或失败 |
+| 状态可观测 | `--status-file` 每轮落一个小 JSON（`worker_id`/`updated_at`/`concurrency`/`in_flight`/`handled`/`poll`），守护脚本与运维直接读它 |
+
 ## 七、重试
 
 被驳回后 Master 可以重派同一 task_id（Batch9 起「验收驳回」可直接重派），`remaining_retry` 在驳回当时已减 1，重派不再重复扣；扣到 0 后任务转「执行失败」，不能再派。你不需要自己管次数，但要保证**重派时能接着做**（幂等：别把上一次的半成品重复叠加）。

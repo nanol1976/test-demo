@@ -51,6 +51,8 @@ class TaskDispatchPayload(BaseModel):
     target_worker: Optional[Literal["master", "dsh", "workbuddy", "codex", "user"]] = None
     # Batch9：执行规格（Worker 怎么干）。平台只搬运不解释，字段语义见 docs/base/09。
     exec: Optional[Dict[str, Any]] = None
+    # Batch11：优先级（数字，越大越先）。平台只搬运不排序，排序由 Worker 自己决定。
+    priority: Optional[int] = None
     # 基线要求：验收项为数组，逐条列出，不是字典
     acceptance_criteria: Optional[List[str]] = None
     depends_on: List[str] = Field(default_factory=list)

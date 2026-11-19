@@ -22,8 +22,10 @@
     python worker/agent_worker.py --once        # 处理一轮后退出（验收脚本用）
 """
 import argparse
+import concurrent.futures
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -167,7 +169,7 @@ class Heartbeat(threading.Thread):
 class WorkerAgent:
     def __init__(self, client: PlatformClient, worker_id: str, allow_roots,
                  work_dir: str, heartbeat_interval: float, max_task_seconds: float,
-                 state_file: str = ""):
+                 state_file: str = "", concurrency: int = 1, status_file: str = ""):
         if worker_id not in ALLOWED_SENDERS:
             raise SystemExit(f"--worker-id 必须是 {ALLOWED_SENDERS} 之一（sender 就是执行方身份）")
         self.client = client
@@ -177,7 +179,11 @@ class WorkerAgent:
         self.heartbeat_interval = heartbeat_interval
         self.max_task_seconds = max_task_seconds
         self.state_file = state_file
+        self.status_file = status_file
+        self.concurrency = max(1, int(concurrency))
         self.done = self._load_state()
+        # 优雅退出：收到 SIGTERM/SIGINT 后不再拉新活，等在跑的任务收尾再退
+        self._stop_requested = threading.Event()
 
     # ---- 本地去重（平台侧状态已收敛的任务不会再出现在「执行中」，这里只防同轮重复） ----
     def _load_state(self):
@@ -196,6 +202,39 @@ class WorkerAgent:
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump({"done": sorted(self.done), "updated_at": now_iso()}, fh, ensure_ascii=False)
         os.replace(tmp, self.state_file)
+
+    def _write_status(self, **fields) -> None:
+        """守护进程/运维要看的那点信息，落一个小 JSON 文件（不占接口、不进台账）。"""
+        if not self.status_file:
+            return
+        try:
+            payload = {
+                "worker_id": self.worker_id,
+                "updated_at": now_iso(),
+                "concurrency": self.concurrency,
+                "done_total": len(self.done),
+                **fields,
+            }
+            tmp = self.status_file + ".tmp"
+            os.makedirs(os.path.dirname(os.path.abspath(self.status_file)), exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, ensure_ascii=False)
+            os.replace(tmp, self.status_file)
+        except OSError as exc:  # 状态文件写不了不该拖垮执行
+            log("status_write_failed", error=str(exc))
+
+    @staticmethod
+    def _priority(task: dict) -> int:
+        """任务优先级：payload.priority（数字，越大越先）。缺省 0。"""
+        payload = task.get("payload") or {}
+        try:
+            return int(payload.get("priority") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _sort_key(self, task: dict):
+        # 先按优先级降序，再按派发时间升序（早派的先做），最后按 task_id 稳定兜底
+        return (-self._priority(task), task.get("dispatch_time") or "", task.get("task_id") or "")
 
     # ---- 单个任务 ----
     def handle(self, task: dict) -> None:
@@ -306,43 +345,122 @@ class WorkerAgent:
             self._save_state()
 
     # ---- 主循环 ----
+    def stop(self) -> None:
+        """外部请求优雅退出（信号处理器会调它）。"""
+        self._stop_requested.set()
+
     def run(self, once: bool = False, poll_interval: float = 2.0,
-            max_tasks: int = 0, idle_rounds_before_exit: int = 0) -> int:
+            max_tasks: int = 0, idle_rounds_before_exit: int = 0,
+            grace_seconds: float = 30.0) -> int:
         handled = 0
         idle_rounds = 0
         backoff = 0
-        while True:
+        inflight = {}
+
+        def _on_signal(signum, _frame):
+            log("signal_stop", signal=signum)
+            self.stop()
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
             try:
-                tasks = self.client.list_active_tasks(self.worker_id)
-                backoff = 0
-            except (PlatformError, urllib.error.URLError, OSError) as exc:
-                backoff = min(backoff + 1, 6)
-                log("poll_failed", error=str(exc), retry_in_s=backoff)
-                if once and idle_rounds_before_exit and idle_rounds >= idle_rounds_before_exit:
-                    return 1
-                time.sleep(backoff)
-                continue
+                signal.signal(sig, _on_signal)
+            except (ValueError, OSError):  # 非主线程/平台不支持时忽略
+                pass
 
-            todo = [t for t in tasks if t.get("task_id") not in self.done]
-            if not todo:
-                idle_rounds += 1
-                log("idle", round=idle_rounds, active=len(tasks))
+        executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.concurrency, thread_name_prefix="mw-task"
+        )
+
+        def _drain(timeout: float) -> None:
+            """等在跑的任务收尾；超时就放弃等待（任务仍在别的进程里跑完会自己回执）。"""
+            deadline = time.time() + max(0.0, timeout)
+            for fut in list(inflight):
+                remain = max(0.0, deadline - time.time())
+                try:
+                    fut.result(timeout=remain)
+                except concurrent.futures.TimeoutExpired:
+                    log("drain_timeout", pending=len(inflight))
+                    return
+                except Exception as exc:  # 单个任务异常不影响其它任务
+                    log("task_error", error=str(exc))
+
+        try:
+            while True:
+                # 回收已完成的任务（腾出并发槽位）
+                for fut in [f for f in inflight if f.done()]:
+                    inflight.pop(fut, None)
+
+                stopping = self._stop_requested.is_set()
+                if stopping:
+                    log("stopping", inflight=len(inflight))
+                    _drain(grace_seconds)
+                    return 0
+
+                # 并发槽位满了就先不拉新活
+                slots = self.concurrency - len(inflight)
+                if slots <= 0:
+                    self._write_status(poll="busy", in_flight=len(inflight), handled=handled)
+                    time.sleep(min(poll_interval, 1.0))
+                    continue
+
+                try:
+                    tasks = self.client.list_active_tasks(self.worker_id)
+                    backoff = 0
+                except (PlatformError, urllib.error.URLError, OSError) as exc:
+                    backoff = min(backoff + 1, 6)
+                    log("poll_failed", error=str(exc), retry_in_s=backoff)
+                    self._write_status(poll="failed", error=str(exc), in_flight=len(inflight))
+                    if once and idle_rounds_before_exit and idle_rounds >= idle_rounds_before_exit:
+                        return 1
+                    time.sleep(backoff)
+                    continue
+
+                seen = set(self.done) | {t.get("task_id") for t in self._inflight_tasks(inflight)}
+                todo = [t for t in tasks if t.get("task_id") not in seen]
+                todo.sort(key=self._sort_key)
+
+                if not todo:
+                    idle_rounds += 1
+                    self._write_status(poll="idle", active=len(tasks), in_flight=len(inflight),
+                                       handled=handled)
+                    log("idle", round=idle_rounds, active=len(tasks), in_flight=len(inflight))
+                    if once and not inflight:
+                        return 0
+                    if idle_rounds_before_exit and idle_rounds >= idle_rounds_before_exit and not inflight:
+                        return 0
+                    if inflight:
+                        time.sleep(min(poll_interval, 0.5))
+                        continue
+                    time.sleep(poll_interval)
+                    continue
+
+                idle_rounds = 0
+                for task in todo[:slots]:
+                    if self._stop_requested.is_set():
+                        break
+                    fut = executor.submit(self.handle, task)
+                    inflight[fut] = task
+                    handled += 1
+                    log("task_queued", task_id=task.get("task_id"),
+                        priority=self._priority(task), in_flight=len(inflight))
+                    if max_tasks and handled >= max_tasks:
+                        log("max_tasks_reached", handled=handled)
+                        _drain(grace_seconds)
+                        return 0
+
+                self._write_status(poll="ok", in_flight=len(inflight), handled=handled)
                 if once:
-                    return 0
-                if idle_rounds_before_exit and idle_rounds >= idle_rounds_before_exit:
-                    return 0
-                time.sleep(poll_interval)
-                continue
+                    # 一轮里可能还有活（并发槽位受限时按批提交），继续循环，
+                    # 由"没待办且没在跑"的分支负责退出。
+                    time.sleep(min(poll_interval, 0.2))
+                    continue
+                time.sleep(min(poll_interval, 0.5))
+        finally:
+            executor.shutdown(wait=False)
 
-            idle_rounds = 0
-            for task in todo:
-                self.handle(task)
-                handled += 1
-                if max_tasks and handled >= max_tasks:
-                    log("max_tasks_reached", handled=handled)
-                    return 0
-            if once:
-                return 0
+    @staticmethod
+    def _inflight_tasks(inflight: dict):
+        return [task for task in inflight.values() if isinstance(task, dict)]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -360,6 +478,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--idle-exit-rounds", type=int, default=0, help="连续 N 轮没活就退出，0=常驻")
     p.add_argument("--once", action="store_true", help="处理一轮（含并发的多个任务）后退出")
     p.add_argument("--state-file", default="", help="本地已完成任务记录，防止重启重复处理")
+    p.add_argument("--concurrency", type=int, default=1, help="并发执行的任务数（默认 1=串行）")
+    p.add_argument("--grace-seconds", type=float, default=30.0, help="收到停止信号后等在跑任务收尾的秒数")
+    p.add_argument("--status-file", default="", help="运行时状态 JSON 落盘路径（守护与运维用）")
     return p
 
 
@@ -374,12 +495,15 @@ def main(argv=None) -> int:
         heartbeat_interval=args.heartbeat_interval,
         max_task_seconds=args.max_task_seconds,
         state_file=args.state_file,
+        concurrency=args.concurrency,
+        status_file=args.status_file,
     )
     log("worker_start", worker_id=args.worker_id, base_url=args.base_url,
         allow_roots=allow_roots, work_dir=args.work_dir)
     return agent.run(once=args.once, poll_interval=args.poll_interval,
                      max_tasks=args.max_tasks,
-                     idle_rounds_before_exit=args.idle_exit_rounds)
+                     idle_rounds_before_exit=args.idle_exit_rounds,
+                     grace_seconds=args.grace_seconds)
 
 
 if __name__ == "__main__":

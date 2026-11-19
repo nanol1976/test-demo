@@ -1,0 +1,45 @@
+# Master-Worker Worker 守护单元（Linux / systemd）
+#
+# 用法（部署机是 Linux 时）：
+#   1) 改下面 4 处：WorkingDirectory / ExecStart 里的路径、Environment 的 MW_BASE_URL、MW_API_TOKEN
+#   2) sudo cp deploy/worker-systemd.service /etc/systemd/system/mw-worker.service
+#   3) sudo systemctl daemon-reload && sudo systemctl enable --now mw-worker
+#   4) 看状态：systemctl status mw-worker ；看日志：journalctl -u mw-worker -f
+#
+# 设计要点：
+# - Restart=always + RestartSec：进程崩了自动拉起来（Worker 本身不存状态，靠平台台账恢复）
+# - KillSignal=SIGTERM + TimeoutStopSec=90：先给 Worker 优雅退出的窗口（--grace-seconds 30），
+#   超出才强杀；强杀不会把任务打成失败，任务留在平台「执行中」，重启后按心跳/超时规则处理
+# - --status-file 让运维能直接 cat 出"现在在跑几个任务"
+
+[Unit]
+Description=Master-Worker Worker Agent
+Documentation=https://github.com/nanol1976/test-demo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/master-worker-platform
+ExecStart=/opt/master-worker-platform/.venv/bin/python /opt/master-worker-platform/worker/agent_worker.py \
+    --base-url http://127.0.0.1:8000 \
+    --worker-id workbuddy \
+    --concurrency 2 \
+    --grace-seconds 30 \
+    --status-file /opt/master-worker-platform/run/worker_status.json \
+    --state-file /opt/master-worker-platform/run/worker_done.json
+Environment=MW_API_TOKEN=
+# 平台挂了别疯狂重启刷日志
+Restart=always
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=90
+
+# 最小权限（按实际用户改）
+User=mwworker
+Group=mwworker
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

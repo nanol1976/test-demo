@@ -218,6 +218,30 @@ def stage_static():
           and "dispatch_payload" in models_py,
           "迁移或模型缺 dispatch_payload")
 
+    # 1.5b2 Worker 可运维性红线（Batch11）：并发/优雅退出/状态文件/三平台守护模板
+    worker_py = read(os.path.join(ROOT, "worker", "agent_worker.py"))
+    for flag in ("--concurrency", "--grace-seconds", "--status-file"):
+        check(f"Worker 支持 {flag}", flag in worker_py, "参数缺失")
+    check("Worker 收到 SIGTERM 会优雅退出（signal_stop）",
+          "signal_stop" in worker_py and "SIGTERM" in worker_py, "缺信号处理")
+    check("Worker 并发用线程池且有上限", "ThreadPoolExecutor" in worker_py and "max_workers=self.concurrency" in worker_py)
+    templates = {
+        "deploy/worker-systemd.service": ["Restart=always", "TimeoutStopSec=90", "agent_worker.py"],
+        "deploy/worker-launchd.plist": ["KeepAlive", "ExitTimeOut", "agent_worker.py"],
+        "deploy/worker-windows-task.ps1": ["Register-ScheduledTask", "agent_worker.py", "RestartCount"],
+    }
+    missing_tpl = []
+    for rel, needles in templates.items():
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path):
+            missing_tpl.append(f"{rel}(缺文件)")
+            continue
+        text = read(path)
+        for needle in needles:
+            if needle not in text:
+                missing_tpl.append(f"{rel}:{needle}")
+    check("三平台守护模板齐全且关键字段在", not missing_tpl, "; ".join(missing_tpl[:4]))
+
     # 1.5c 越权与重放红线（Batch10）：权限校验不能被"顺手删掉"
     dispatch_py = read(os.path.join(ROOT, "app", "services", "dispatch.py"))
     owner_calls = re.findall(r"_require_owner\(task, envelope, \"task_(\w+)\"", dispatch_py)
