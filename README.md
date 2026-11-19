@@ -160,6 +160,17 @@ ALLOW_OVERWRITE_MAIN=1 git push --force origin master:main
 
 新克隆的仓库没有 `core.hooksPath`，需要执行一次 `git config core.hooksPath .githooks` 才有这道守卫。
 
+### 服务端兜底（不依赖本地钩子）
+
+`master` 与 `main` 两条分支都已开分支保护（2026-11-19 设置，`administration` 权限开启后配置）：
+
+- **禁止强推**（`allow_force_pushes: false`）
+- **禁止删除分支**（`allow_deletions: false`）
+- **管理员同样受约束**（`enforce_admins: true`）
+- 未开启"必须走 PR"，所以正常的快进推送（`git push origin master` / `docs:main`）不受影响
+
+实测：`git push --force origin HEAD:main` → `remote: error: GH006: Protected branch update failed for refs/heads/main. - Cannot force-push to this branch`，`main` 保持 `139baf4` 未被动。
+
 ## 看板
 
 - 自动刷新：列表工具栏可选 关 / 5s / 15s / 30s，间隔记在 localStorage；页面切到后台自动暂停（`visibilitychange`）。
