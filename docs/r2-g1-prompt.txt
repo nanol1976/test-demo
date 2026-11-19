@@ -1,0 +1,13 @@
+只读 docs\r2-g1.md，不要读其它文件，不要调用工具，直接输出完整代码。
+
+按要求改好后，按此格式输出三个文件的完整新内容（不要省略、不要占位）：
+<<<FILE: app/schemas/__init__.py>>>
+内容
+<<<END>>>
+<<<FILE: app/api/deps.py>>>
+内容
+<<<END>>>
+<<<FILE: app/core/config.py>>>
+内容
+<<<END>>>
+只输出块，不要任何解释。

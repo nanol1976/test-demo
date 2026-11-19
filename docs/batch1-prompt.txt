@@ -1,0 +1,38 @@
+你是本项目的专职后端开发工程师。工作目录已包含两份需求文档：
+- docs/00-基线规范-v1.0.md（唯一需求基线，不可变更）
+- docs/01-Batch1-任务卡.md（本批次交付范围）
+
+【重要环境说明，先读这一段】
+当前 shell 是 Windows PowerShell（pwsh），不是 bash。已确认你连续多次因 bash 语法报错：
+- 不要使用 heredoc（<< 'EOF'）、不要用 && 连接命令、不要用 bash 引号转义
+- 不要用 `python << EOF` 写文件
+正确的文件写入方式（任选其一）：
+1. 直接使用你自己的文件创建/编辑能力（apply_patch 或写文件工具）——首选
+2. PowerShell here-string：
+   @'
+   ...内容...
+   '@ | Set-Content -Path app\core\logging.py -Encoding utf8
+3. 多行内容较长时，优先拆成多次单文件写入，一次只写一个文件，写完立刻用 Get-Content 校验前几行
+
+【任务】
+先完整读取 docs/00-基线规范-v1.0.md 与 docs/01-Batch1-任务卡.md，然后严格只实现 Batch1 任务卡列出的交付范围：
+1. Python 项目骨架（app/ 分层：api / core / models / services / schemas）
+2. 严格对齐台账字段的 SQLAlchemy 2.x 模型（PipelineLedger / TaskLedger / MessageArchive）
+3. scripts/init_db.py 建表与索引脚本（必须实际跑通）
+4. Pydantic v2 报文模型（Envelope 公共字段校验 + 8 种 msg_type payload 最小骨架）
+5. 归档追加写入服务（JSONL + 索引行）
+6. README（安装、初始化、启动、目录说明、边界声明）
+
+硬性约束（违反即不合格）：
+- 平台只做基础设施层：不得实现 DAG 拆解、Schema 校验、验收判定、审批决策等 Master 职责
+- 台账只允许追加与状态更新，不得提供任何删除/覆盖历史记录的能力
+- msg_type 只能是基线中的 8 种，不得增删或改语义
+- 不得引入业务领域概念（不得出现量化、回测、股票等业务词汇）
+- 技术栈固定：FastAPI + SQLAlchemy 2.x + SQLite + Pydantic v2，不要换栈
+- 已存在的 app/core/config.py、requirements.txt、.env.example 可以复用或修正，但不要留半成品
+
+【收尾自检】
+- 实际执行 python scripts/init_db.py，确认建库成功，把输出贴进最终回复
+- 用 python -c 逐文件 import 校验语法（app.models、app.schemas、app.services）
+最终回复请给出：已生成文件清单、逐项对照任务卡验收标准的自检结论、以及需要主审确认的疑点。
+如果某个文件你无法写入，请立即在回复中说明，不要反复重试。

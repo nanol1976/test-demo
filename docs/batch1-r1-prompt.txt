@@ -1,0 +1,10 @@
+请读取 docs/02-Batch1-修正单R1.md，按修正单逐条整改。
+
+补充最关键的三条环境事实（上次就是卡在这里，浪费了大量时间）：
+1. 依赖已装好，解释器固定用 .venv311\Scripts\python.exe。禁止任何 pip install，禁止创建 venv。
+2. 写文件时，命令里只允许一条 Set-Content here-string，不要嵌套其它引号；内容里禁止出现 \" 这种转义双引号，Python 字符串统一用单引号。每写完一个文件用 Get-Content 检查前几行。
+3. 不要在 shell 里拼接超长命令做转义；一次一个文件，写完就验证。
+
+执行顺序建议：先修 P0-1、P0-2 两个坏文件 → 再补 app/core/logging.py、app/main.py、app/api 骨架 → 再修 models 的级联删除 → 修 init_db.py → 写 README.md → 最后跑四项自检并贴输出。
+
+整改完成后，最终回复里给出：逐条对照修正单的整改结论（P0/P1 每一条标注已修/未修）、四项自检的真实输出、剩余疑点。

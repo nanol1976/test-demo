@@ -1,0 +1,12 @@
+读取 docs/03-Batch1-修正单R2.md，按单据一次性整改。
+
+三条硬性提醒（上次失败过的坑，别再踩）：
+1. 依赖已装好，只用 .venv311\Scripts\python.exe，禁止 pip install、禁止建 venv。
+2. 一次只写一个文件，命令里只有一条 Set-Content here-string，不要嵌套引号；内容里的双引号被转义成 \" 就会语法错误，写完必须 Get-Content 检查。
+3. 修正单第四节"禁止改动"的三条绝对不许动，那是评审已经否决的意见。
+
+执行顺序：先修 P0 的 4 条（schemas 类型、deps 单例、两个 CheckConstraint），再修 P1 的 5 条（repositories 新文件、时区校验、task_goal 必填、MessageArchive 唯一约束、UTC 目录），最后 P2 的 4 条，收尾补 .gitignore。
+
+改变表结构的，必须先把 data\mw_platform.db 删掉重建（这是开发库，允许重建），再跑 init_db.py。
+
+最后跑修正单第五节的 4 条自检，把真实输出贴进回复，并逐条标注 P0/P1/P2 已修/未修。

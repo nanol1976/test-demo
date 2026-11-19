@@ -1,0 +1,20 @@
+OpenAI Codex v0.169.0
+--------
+workdir: C:\Users\longf\codex-workspace\master-worker-platform
+model: nvidia/nemotron-3-ultra-550b-a55b
+provider: nvidia
+approval: never
+sandbox: read-only
+reasoning effort: none
+reasoning summaries: none
+session id: 01a1f26e-74cb-7ae2-aa07-4caba0d06dca
+--------
+user
+OK
+
+warning: Model metadata for `nvidia/nemotron-3-ultra-550b-a55b` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.
+codex
+收到。请告诉我需要做什么。
+tokens used
+1,313
+收到。请告诉我需要做什么。

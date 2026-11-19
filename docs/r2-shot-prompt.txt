@@ -1,0 +1,47 @@
+只读 docs\r2-bundle.md 一个文件，不要读其它文件，不要调用任何工具，直接在你的最终回复里输出代码。
+
+bundle 里包含：7 个现有源码文件全文 + R2 整改要求。
+
+请输出需要改动文件的**完整新内容**，格式严格如下（每个文件一个块，路径必须一字不差）：
+
+<<<FILE: app/schemas/__init__.py>>>
+（完整文件内容）
+<<<END>>>
+
+<<<FILE: app/models/__init__.py>>>
+（完整文件内容）
+<<<END>>>
+
+<<<FILE: app/api/deps.py>>>
+（完整文件内容）
+<<<END>>>
+
+<<<FILE: app/services/__init__.py>>>
+（完整文件内容）
+<<<END>>>
+
+<<<FILE: app/repositories/ledger.py>>>
+（新文件的完整内容）
+<<<END>>>
+
+<<<FILE: app/repositories/__init__.py>>>
+（新文件的完整内容）
+<<<END>>>
+
+<<<FILE: app/core/config.py>>>
+（完整文件内容）
+<<<END>>>
+
+<<<FILE: scripts/init_db.py>>>
+（完整文件内容）
+<<<END>>>
+
+<<<FILE: .gitignore>>>
+（完整文件内容）
+<<<END>>>
+
+硬性要求：
+1. 每个文件都必须是**完整可运行**的内容，不要省略号、不要"此处不变"之类占位。
+2. 严格遵守 R2 单据：P0 四条必改，P1 五条必改，P2 四条必改。
+3. 单据第四节"禁止改动"的三条绝对不许动（task_id 保持必填、default=list 保持原样、不实现状态机与调度器）。
+4. 不要输出任何解释文字、不要开场白、不要总结，只输出 FILE 块。
