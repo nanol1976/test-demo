@@ -1,5 +1,9 @@
 # Master-Worker 主控集群平台
 
+[![ci](https://github.com/nanol1976/test-demo/actions/workflows/ci.yml/badge.svg)](https://github.com/nanol1976/test-demo/actions/workflows/ci.yml)
+![Python 3.11](https://img.shields.io/badge/python-3.11-blue)
+![业务无关](https://img.shields.io/badge/domain-agnostic-success)
+
 给「多 Agent 主控集群」用的基础设施层：收报文、排队、路由、落台账、判超时/心跳/熔断、提供查询与看板。
 
 **业务无关**——它不认识"订单""持仓""回测"，只认协议字段和状态机。量化、回测只是演示用例，任何业务都能套。
@@ -103,6 +107,7 @@ CI 门禁查什么：
 | 门禁 | 检查内容 |
 | --- | --- |
 | 语法 | 全部 `.py` 可编译 |
+| 依赖齐备 | `requirements.txt` 声明齐全，且每个包真能 `import` |
 | 业务无关 | 代码/迁移里业务词 0 命中（文档里的边界示例不算） |
 | 台账铁律 | 无 `.delete()` / `DELETE FROM` / `drop_table` |
 | 接口面 | 仍为 9 个接口，方法只有 GET/POST |
@@ -114,7 +119,21 @@ CI 门禁查什么：
 | 迁移 | 空库 --check 不通过 → upgrade 成功 → --check 通过 → 幂等 |
 
 怎么把门禁接到仓库（GitHub / Gitee / 内网 GitLab 三种写法、换行符与 BOM 的坑）：见 [docs/14-CI接入指南.md](docs/14-CI接入指南.md)。
-当前仓库只有本地 `master`、无远端，因此是"推送就绪"而非"已推送"。
+
+**当前状态**：已推到 `https://github.com/nanol1976/test-demo`，`main` / `master` 两条分支都跑 GitHub Actions，最近一次 success（46 秒）。默认分支 `main` 上就是全量代码。
+
+### 本地怎么验才算数（三条口径）
+
+前七轮"本地全绿"上 CI 连爆三次，全是本地环境遮着的：
+
+1. **清空 `PYTHONPATH` 再跑** —— 本地常设 `PYTHONPATH=<工程根>`，CI 没有，脚本自身必须能 import；
+2. **把 `data/` 改名后再跑** —— `data/` 被 gitignore、空目录不进 Git，干净 clone 里没有，sqlite 会 `unable to open database file`；
+3. **依赖只按 `requirements.txt` 装** —— 手动装过的包（比如 `httpx`）不会写进依赖，干净环境一装就红。
+
+```bash
+# 三条口径合成一条命令（Linux/macOS）
+mv data data_bak 2>/dev/null; unset PYTHONPATH; python scripts/ci.py; mv data_bak data 2>/dev/null
+```
 
 ## 看板
 
@@ -158,9 +177,10 @@ docs/base/      底座规范（架构·SOP·协议·状态机·契约·故障案
 | 5 | 令牌存前端 localStorage | 正式部署建议 HttpOnly Cookie |
 | 6 | `ensure_schema` 自动建表 | 仅兜底，生产走 `deploy/migrate.py` |
 | 7 | 迁移无自动回滚 | 数据不可回滚，只能写「向前」迁移 |
-| 8 | CI 未接远端仓库 | workflow 已就位，推到仓库才真正跑 |
+| 8 | ~~CI 未接远端仓库~~ | Batch8 已补：已推 `nanol1976/test-demo`，GitHub Actions 真跑并转绿（`main`/`master` 双分支） |
 | 9 | 关键字搜索是 `LIKE '%q%'` 子串匹配 | 台账到十万级会慢，届时改用检索表或 FTS |
 | 10 | `--baseline --force` 会清 `schema_version` | 只碰元数据表、需人工显式加参数，但仍属"删"，用前先备份 |
+| 11 | 依赖只在 `requirements.txt` 里声明 | 本地手工装的包一律不算，`ci.py` 第 1.1b 条门禁会拦 |
 
 ## 台账铁律
 
