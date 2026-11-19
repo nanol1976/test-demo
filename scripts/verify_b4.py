@@ -104,7 +104,8 @@ with TestClient(app) as client:
     # ------------------------------------------------------------ B 心跳告警
     print("=== B 心跳超时告警（只告警不改状态）===")
     r = client.post("/api/messages", json=body("t-b4-b", "t-b4-b-1", "task_dispatch",
-                                              payload={"task_goal": "心跳用例"}))
+                                              payload={"task_goal": "心跳用例",
+                                                       "target_worker": "codex"}))
     check("派发 202", r.status_code == 202, f"status={r.status_code}")
     clock.advance(10)
     r = client.post("/api/messages", json=body("t-b4-b", "t-b4-b-1", "task_heartbeat",

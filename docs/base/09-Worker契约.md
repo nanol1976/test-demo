@@ -75,10 +75,11 @@ POST /api/messages                                    # 报活 / 交活 / 报做
 
 ## 三、四条硬规矩
 
-1. **只碰自己的 task_id**。带别人的 task_id 发报文，平台会 409/404；试图改别的任务状态等于越权。
+1. **只碰自己的 task_id（平台已强校验，Batch10 起生效）**。`task_heartbeat` / `task_return` / `task_reject` 的 `sender` 必须等于该任务的 `target_worker`，否则 **409 且不落归档**；`task_abort` 只有两类人可以发：任务归属者本人，或 Master（叫停权）。派发（`task_dispatch`）只有 Master 能发，Worker 派活一律 409。
 2. **必须带 trace_id，且要与任务原属 trace 一致**。平台用 `_require_same_trace` 校验，不一致 409。
 3. **心跳要持续**。平台默认 `heartbeat_timeout_seconds=120`；超了只写 `[心跳告警]` 留痕，**不会杀你的任务**，但 Master 会看到告警并可能决定中止。
 4. **做不了要明说**。发 `task_reject` 并给 `reject_reason`，不要硬扛到超时——超时会被判 `执行失败`，比主动驳回更难看。
+5. **别指望改 timestamp 重发能再来一次（Batch10）**。平台按 `sender + payload` 指纹做重放拦截：同内容换时间重发 → 202 幂等忽略，不推进状态、不重复扣重试次数、不追加归档。想让平台当新报文处理，就必须真的改了内容。
 
 ## 四、回传内容要求
 

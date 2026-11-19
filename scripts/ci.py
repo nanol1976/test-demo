@@ -218,6 +218,22 @@ def stage_static():
           and "dispatch_payload" in models_py,
           "迁移或模型缺 dispatch_payload")
 
+    # 1.5c 越权与重放红线（Batch10）：权限校验不能被"顺手删掉"
+    dispatch_py = read(os.path.join(ROOT, "app", "services", "dispatch.py"))
+    owner_calls = re.findall(r"_require_owner\(task, envelope, \"task_(\w+)\"", dispatch_py)
+    check("越权校验覆盖 heartbeat/return/reject/abort",
+          set(owner_calls) == {"heartbeat", "return", "reject", "abort"},
+          sorted(set(owner_calls)))
+    check("task_abort 允许 master 叫停（allow_master=True）",
+          "_require_owner(task, envelope, \"task_abort\", allow_master=True)" in dispatch_py)
+    check("派发只允许 Master（Worker 不得派活）",
+          'if envelope.sender.value != "master":' in dispatch_py)
+    check("重放拦截在（sender+payload 指纹）",
+          "REPLAY_GUARDED_TYPES" in dispatch_py and "_find_replay" in dispatch_py,
+          "缺重放拦截")
+    check("重放拦截先于状态校验（仍在 _idempotent 包装里）",
+          dispatch_py.find("_find_replay(db, envelope)") < dispatch_py.find("_require_status(task, TASK_RETURN_FROM"))
+
     # 1.6 启动自检仍在（防有人为了"看起来干净"把它删了）
     main_py = read(os.path.join(ROOT, "app", "main.py"))
     check("ensure_schema 启动自检仍在", "ensure_schema" in main_py)

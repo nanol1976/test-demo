@@ -86,7 +86,8 @@ with TestClient(app) as client:
     # ------------------------------------------------------------ A 主链路
     print("=== A 主链路：一条 dispatch 报文驱动任务 ===")
     body = env("t-b2-a", "t-b2-a-01", "task_dispatch",
-               payload={"task_goal": "验证主链路", "max_retry": 3})
+               payload={"task_goal": "验证主链路", "max_retry": 3,
+                        "target_worker": "codex"})
     r = post(client, body)
     check("POST /api/messages 返回 202", r.status_code == 202, f"status={r.status_code}")
     data = r.json()
@@ -117,7 +118,7 @@ with TestClient(app) as client:
     check("回传后=待验收", t["status"] == "待验收", t["status"])
     check("return_time 非空", t["return_time"] is not None)
 
-    r = post(client, env("t-b2-a", "t-b2-a-01", "task_reject", sender="dsh",
+    r = post(client, env("t-b2-a", "t-b2-a-01", "task_reject", sender="codex",
                          payload={"reason": "缺关键字段"}))
     check("task_reject 202", r.status_code == 202, f"status={r.status_code}")
     t = client.get("/api/tasks/t-b2-a-01").json()

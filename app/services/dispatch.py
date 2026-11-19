@@ -75,16 +75,61 @@ def _find_archive(db: Session, envelope: Envelope) -> Optional[MessageArchive]:
 
 # ---------------------------------------------------------------- 幂等前置
 
-def _idempotent(func):
-    """同一 (trace_id, task_id, msg_type, timestamp) 已归档 → 直接返回，不再推进状态。
+# 只有"执行方动作"才做内容级重放拦截。
+# task_dispatch 刻意排除：驳回后 Master 用同样 payload 重派是合法重试，
+# 若按内容判重会被误杀（同一 timestamp 的精确重放仍由幂等键拦住）。
+REPLAY_GUARDED_TYPES = {"task_heartbeat", "task_return", "task_reject", "task_abort"}
 
-    顺序很重要：幂等判定必须在状态校验之前，否则重复投递会被误判成非法迁移（409）。
+
+def _fingerprint(envelope: Envelope):
+    """重放指纹：发送方 + payload 规范化 JSON。
+
+    攻击者改 timestamp 重放同一条报文，幂等键会失效（timestamp 变了），
+    但 sender 与 payload 一模一样——指纹一致即判为重放，不推进状态、不扣次数。
+    """
+    return (
+        envelope.sender.value,
+        json.dumps(envelope.payload or {}, sort_keys=True, ensure_ascii=False, default=str),
+    )
+
+
+def _find_replay(db: Session, envelope: Envelope) -> Optional[MessageArchive]:
+    stmt = select(MessageArchive).where(
+        MessageArchive.trace_id == envelope.trace_id,
+        MessageArchive.task_id == envelope.task_id,
+        MessageArchive.msg_type == envelope.msg_type.value,
+    )
+    want = _fingerprint(envelope)
+    for row in db.execute(stmt).scalars().all():
+        try:
+            data = json.loads(row.raw_json)
+        except (TypeError, ValueError):
+            continue
+        got = (
+            data.get("sender"),
+            json.dumps(data.get("payload") or {}, sort_keys=True, ensure_ascii=False, default=str),
+        )
+        if got == want:
+            return row
+    return None
+
+
+def _idempotent(func):
+    """幂等 + 重放拦截，两者都必须在状态校验之前。
+
+    1. 幂等键 `(trace_id, task_id, msg_type, timestamp)` 命中 → 直接返回同一 archive_id；
+    2. 键没命中但 sender + payload 与历史报文完全一致（换了 timestamp 的重放）→ 同样拦截。
+    顺序很重要：若先做状态校验，重复投递会被误判成非法迁移（409）。
     """
 
     def wrapper(db: Session, envelope: Envelope) -> HandlerResult:
         existing = _find_archive(db, envelope)
         if existing is not None:
             return HandlerResult(existing.id, False, "重复报文，已忽略（幂等）")
+        if envelope.msg_type.value in REPLAY_GUARDED_TYPES:
+            replay = _find_replay(db, envelope)
+            if replay is not None:
+                return HandlerResult(replay.id, False, "重复报文（内容一致），已忽略（重放拦截）")
         return func(db, envelope)
 
     wrapper.__name__ = func.__name__
@@ -99,6 +144,23 @@ def _require_task(repo: LedgerRepository, task_id: str, action: str) -> Any:
     if task is None:
         raise TaskNotFoundError(f"{action} 失败：任务不存在 {task_id}")
     return task
+
+
+def _require_owner(task: Any, envelope: Envelope, action: str, allow_master: bool = False) -> None:
+    """越权校验：执行方动作只能由任务归属的执行方发出。
+
+    03-权限矩阵：心跳 / 回传 / 驳回 / 中止 统统是「Worker 自己的任务」，
+    Master 唯一例外是 task_abort（叫停权，04 协议明确 master/worker 都可发）。
+    伪造他人 task_id 发报文 → 409，且不落任何状态。
+    """
+    who = envelope.sender.value
+    if allow_master and who == "master":
+        return
+    if who != task.target_worker:
+        extra = "（Master 可叫停，但 Worker 只能中止自己的任务）" if allow_master else ""
+        raise IllegalTransitionError(
+            f"{action} 越权：任务 {task.task_id} 归属 {task.target_worker}，报文来自 {who}{extra}"
+        )
 
 
 def _require_status(task: Any, allowed: set, action: str) -> None:
@@ -172,6 +234,11 @@ def _payload_json(payload: Dict[str, Any]) -> str:
 @_idempotent
 def handle_task_dispatch(db: Session, envelope: Envelope) -> HandlerResult:
     payload: Dict[str, Any] = envelope.payload or {}
+    # 03-权限矩阵：派发是 Master 的唯一权力，Worker 不得派活（越权先拦，连流水线都不建）
+    if envelope.sender.value != "master":
+        raise IllegalTransitionError(
+            f"task_dispatch 越权：只有 Master 可以派发，报文来自 {envelope.sender.value}"
+        )
     repo = LedgerRepository(db)
 
     pipeline = repo.get_pipeline(envelope.trace_id)
@@ -227,6 +294,7 @@ def handle_task_heartbeat(db: Session, envelope: Envelope) -> HandlerResult:
     repo = LedgerRepository(db)
     task = _require_task(repo, envelope.task_id, "task_heartbeat")
     _require_same_trace(task, envelope, "task_heartbeat")
+    _require_owner(task, envelope, "task_heartbeat")
     archive_id = archive_message(db, envelope)
     return HandlerResult(archive_id, False, "心跳已记录（不改状态，超时判定属 Batch4）")
 
@@ -236,6 +304,7 @@ def handle_task_return(db: Session, envelope: Envelope) -> HandlerResult:
     repo = LedgerRepository(db)
     task = _require_task(repo, envelope.task_id, "task_return")
     _require_same_trace(task, envelope, "task_return")
+    _require_owner(task, envelope, "task_return")
     _require_status(task, TASK_RETURN_FROM, "task_return")
 
     archive_id = archive_message(db, envelope)
@@ -249,6 +318,7 @@ def handle_task_reject(db: Session, envelope: Envelope) -> HandlerResult:
     repo = LedgerRepository(db)
     task = _require_task(repo, envelope.task_id, "task_reject")
     _require_same_trace(task, envelope, "task_reject")
+    _require_owner(task, envelope, "task_reject")
     _require_status(task, TASK_REJECT_FROM, "task_reject")
 
     reason = (envelope.payload or {}).get("reason") or "（未提供驳回原因）"
@@ -272,6 +342,7 @@ def handle_task_abort(db: Session, envelope: Envelope) -> HandlerResult:
     repo = LedgerRepository(db)
     task = _require_task(repo, envelope.task_id, "task_abort")
     _require_same_trace(task, envelope, "task_abort")
+    _require_owner(task, envelope, "task_abort", allow_master=True)
 
     reason = (envelope.payload or {}).get("reason") or "（未提供中止原因）"
     archive_id = archive_message(db, envelope)

@@ -116,7 +116,7 @@ python deploy/migrate.py --baseline 2 --force  # 已有版本记录时强制重�
 ## 测试与 CI
 
 ```bash
-python scripts/run_all.py            # 一键：verify_b2/b3/b4/b5/b7/b8/b9 + 真实起服务冒烟
+python scripts/run_all.py            # 一键：verify_b2/b3/b4/b5/b7/b8/b9/b10 + 真实起服务冒烟
 python scripts/run_all.py --no-smoke # 跳过冒烟
 python scripts/ci.py                 # CI 门禁：静态红线 + 迁移三段式 + 全量测试
 python scripts/ci.py --static-only   # 只跑静态门禁（快，本地提交前跑）
@@ -137,6 +137,7 @@ CI 门禁查什么：
 | JS 语法 | `node --check app/static/app.js`（本机无 node 则跳过并留痕） |
 | 查询契约 | `q` 参数存在、排序走白名单常量、非法排序抛 ValueError |
 | Worker 红线 | Worker 只走 HTTP：不 `import app.*`、不碰 sqlalchemy；无删除调用 |
+| 越权/重放 | `_require_owner` 覆盖 heartbeat/return/reject/abort；`task_abort` 允许 master；派发只允许 master；重放指纹拦截存在且早于状态校验 |
 | 派发载荷 | `task_ledger.dispatch_payload` 列在（否则 Worker 轮询拿到任务也拿不到"干什么"） |
 | 迁移 | 空库 --check 不通过 → upgrade 成功 → --check 通过 → 幂等 |
 
@@ -220,7 +221,7 @@ worker/         agent_worker.py（真 Worker：轮询/执行/心跳/回执）+ e
 deploy/         run.ps1 / run.sh / migrate.py
 migrations/     runner.py + versions/（版本化增量迁移）
 .github/        workflows/ci.yml（接仓库即可用）
-scripts/        init_db / verify_b2..b9 / run_all / smoke_http / ci
+scripts/        init_db / verify_b2..b10 / run_all / smoke_http / ci
 docs/           Batch 任务卡与验收单
 docs/base/      底座规范（架构·SOP·协议·状态机·契约·故障案例…）
 ```
@@ -240,7 +241,7 @@ docs/base/      底座规范（架构·SOP·协议·状态机·契约·故障案
 | 9 | 关键字搜索是 `LIKE '%q%'` 子串匹配 | 台账到十万级会慢，届时改用检索表或 FTS |
 | 10 | `--baseline --force` 会清 `schema_version` | 只碰元数据表、需人工显式加参数，但仍属"删"，用前先备份 |
 | 11 | 依赖只在 `requirements.txt` 里声明 | 本地手工装的包一律不算，`ci.py` 第 1.1b 条门禁会拦 |
-| 12 | 越权强校验未做（heartbeat/return 的 `sender` 未校验等于 `task.target_worker`） | 目前只校验 trace 同源；伪造他人 task_id 发报文仍可落账（下一批处理） |
+| 12 | ~~越权强校验未做~~ | Batch10 已补：`sender` 必须等于 `task.target_worker`（越权 409 且不落归档）；重放按 sender+payload 指纹拦截；派发只允许 Master |
 | 13 | Worker 单进程串行处理 | 并发度与优先级需先定调度策略；当前一轮内的任务按列表顺序逐个跑 |
 
 ## 台账铁律
