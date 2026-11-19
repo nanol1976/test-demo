@@ -1,4 +1,4 @@
-# Windows 一键启动脚本
+﻿# Windows 一键启动脚本
 # 用法：powershell -ExecutionPolicy Bypass -File deploy\run.ps1
 #     可选参数：-Port 8000  -Token "xxx"
 param(
@@ -6,7 +6,10 @@ param(
     [string]$Token = ""
 )
 
-$Error = $null
+# 控制台按 UTF-8 输出，避免中文提示在日志里变乱码
+$OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
 $env:PYTHONPATH = $Root
@@ -23,10 +26,16 @@ if (-not (Test-Path $Py)) {
     if (-not (Test-Path $Py)) { Write-Host "创建虚拟环境失败"; exit 1 }
 }
 
-# 2) 装依赖（幂等）
-Write-Host "安装依赖…"
-& $Py -m pip install -q -r requirements.txt
-if ($LASTEXITCODE -ne 0) { Write-Host "依赖安装失败"; exit 1 }
+# 2) 检查依赖（已满足则跳过安装，避免镜像限流时卡住）
+Write-Host "检查依赖…"
+& $Py -c "import fastapi, uvicorn, sqlalchemy, pydantic_settings"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  安装依赖…"
+    & $Py -m pip install -q -r requirements.txt
+    if ($LASTEXITCODE -ne 0) { Write-Host "依赖安装失败"; exit 1 }
+} else {
+    Write-Host "  依赖已满足，跳过安装"
+}
 
 # 3) 迁移
 Write-Host "执行迁移…"

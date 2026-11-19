@@ -25,8 +25,13 @@ if [ ! -x "$PY" ]; then
   exit 1
 fi
 
-echo "安装依赖…"
-"$PY" -m pip install -q -r requirements.txt
+echo "检查依赖…"
+if "$PY" -c "import fastapi, uvicorn, sqlalchemy, pydantic_settings" >/dev/null 2>&1; then
+  echo "  依赖已满足，跳过安装"
+else
+  echo "  安装依赖（镜像限流时可能较慢，可先配好 pip 源）…"
+  "$PY" -m pip install -q -r requirements.txt
+fi
 
 echo "执行迁移…"
 "$PY" deploy/migrate.py
