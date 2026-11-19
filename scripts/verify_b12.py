@@ -138,9 +138,10 @@ def main() -> int:
     url = f"sqlite:///{DB}"
     proc = run_migrate([], url)
     check("干净库升级成功", proc.returncode == 0, proc.stdout.strip().splitlines()[-1:] and proc.stdout.strip().splitlines()[-1])
-    check("schema_version 到 5（Batch13 又加了一张表）",
-          "schema_version：0 → 5" in proc.stdout or "schema_version：5" in proc.stdout,
-          proc.stdout.strip().splitlines()[-2:])
+    import re as _re
+    _line = _re.search(r"schema_version：[^\n]*", proc.stdout)
+    _nums = [int(x) for x in _re.findall(r"\d+", _line.group(0))] if _line else [0]
+    check("schema_version ≥ 4（后续批次还会往上加）", max(_nums) >= 4, proc.stdout.strip().splitlines()[-2:])
     check("日志显示应用 v004（Batch13 的 v005 紧随其后）",
           "应用 v004" in proc.stdout)
     import sqlite3

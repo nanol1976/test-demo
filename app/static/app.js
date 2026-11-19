@@ -420,14 +420,16 @@ function workerRegistryState(w) {
 function renderRegistry(workers) {
   const wrap = el("workerTableWrap");
   if (!wrap) return;
-  el("workerCount").textContent = workers.length ? `（${workers.filter((w) => w.online).length}/${workers.length} 在线）` : "";
+  el("workerCount").textContent = workers.length
+    ? `（在线 ${workers.filter((w) => w.online).length} / 共 ${workers.length} 个实例）`
+    : "";
   if (!workers.length) {
     wrap.innerHTML = '<div class="empty">还没有 Worker 上报过（启动 Worker 并接入 /api/workers 即可）</div>';
     return;
   }
   const table = document.createElement("table");
   const head = document.createElement("tr");
-  ["执行方", "状态", "在跑", "并发", "累计完成", "最近上报", "备注"].forEach((h) => {
+  ["执行方", "实例", "状态", "在跑", "并发", "累计完成", "最近上报", "备注"].forEach((h) => {
     const th = document.createElement("th");
     th.textContent = h;
     head.appendChild(th);
@@ -436,6 +438,7 @@ function renderRegistry(workers) {
   workers.forEach((w) => {
     const tr = document.createElement("tr");
     tr.appendChild(td(w.worker_id, "mono"));
+    tr.appendChild(td(w.instance_id || "default", "mono"));
     const st = workerRegistryState(w);
     const stCell = document.createElement("td");
     const span = document.createElement("span");

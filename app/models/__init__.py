@@ -21,11 +21,16 @@ class WorkerRegistry(Base):
     __tablename__ = "worker_registry"
 
     worker_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # Batch14：同一 worker_id 可有多台进程（多实例），用 instance_id 区分，
+    # 否则两台机器会互相覆盖 last_seen，看板上分不清谁在线。
+    instance_id: Mapped[str] = mapped_column(String(64), primary_key=True, default="default")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     concurrency: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    limit: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # 物理列名用 concurrency_limit：`limit` 是 SQL 关键字，裸写在 DDL 里会语法错误
+    # （Batch13 的 v005 就踩到了，只是当时建表被模型抢先做掉才没暴露）
+    limit: Mapped[int] = mapped_column("concurrency_limit", Integer, nullable=False, default=1)
     in_flight: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     handled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

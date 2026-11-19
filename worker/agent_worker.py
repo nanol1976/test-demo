@@ -26,6 +26,7 @@ import concurrent.futures
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -200,7 +201,7 @@ class WorkerAgent:
                  work_dir: str, heartbeat_interval: float, max_task_seconds: float,
                  state_file: str = "", concurrency: int = 1, status_file: str = "",
                  min_concurrency: int = 1, registry_interval: float = 15.0,
-                 register: bool = True):
+                 register: bool = True, instance_id: str = ""):
         if worker_id not in ALLOWED_SENDERS:
             raise SystemExit(f"--worker-id 必须是 {ALLOWED_SENDERS} 之一（sender 就是执行方身份）")
         self.client = client
@@ -216,6 +217,9 @@ class WorkerAgent:
         self.min_concurrency = max(1, min(int(min_concurrency), self.concurrency))
         # Batch13：注册表上报
         self.registry_interval = max(1.0, float(registry_interval))
+        # Batch14：多实例标识。默认取主机名（同一台机重启沿用同一行，不堆垃圾行）；
+        # 一台机要多跑几个 Worker 就显式传 --instance-id。
+        self.instance_id = (instance_id or socket.gethostname() or "default")[:64]
         self.register = bool(register)
         self._live = {"in_flight": 0, "limit": 1, "handled": 0}
         self._register_404_logged = False
@@ -247,12 +251,14 @@ class WorkerAgent:
             return
         beat = {
             "worker_id": self.worker_id,
+            "instance_id": self.instance_id,
             "status": status,
             "concurrency": self.concurrency,
             "limit": int(self._live.get("limit", 1)),
             "in_flight": int(self._live.get("in_flight", 0)),
             "handled": int(self._live.get("handled", 0)),
-            "meta": {"min_concurrency": self.min_concurrency, "pid": os.getpid()},
+            "meta": {"min_concurrency": self.min_concurrency, "pid": os.getpid(),
+                     "host": socket.gethostname()},
         }
         try:
             code, body = self.client.report_worker(beat)
@@ -570,6 +576,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--status-file", default="", help="运行时状态 JSON 落盘路径（守护与运维用）")
     p.add_argument("--registry-interval", type=float, default=15.0,
                    help="执行方注册表上报间隔秒（Batch13；忙闲都报，空转也能被看见）")
+    p.add_argument("--instance-id", default="",
+                   help="多实例标识（Batch14），默认取主机名；一台机跑多个 Worker 时各自指定")
     p.add_argument("--no-register", action="store_true",
                    help="不上报注册表（平台没有 /api/workers 或不想被记录时用）")
     return p
@@ -591,6 +599,7 @@ def main(argv=None) -> int:
         min_concurrency=args.min_concurrency,
         registry_interval=args.registry_interval,
         register=not args.no_register,
+        instance_id=args.instance_id,
     )
     log("worker_start", worker_id=args.worker_id, base_url=args.base_url,
         allow_roots=allow_roots, work_dir=args.work_dir)

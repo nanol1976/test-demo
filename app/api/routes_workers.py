@@ -33,6 +33,8 @@ class WorkerBeat(BaseModel):
     """Worker 上报体。字段都可缺省，缺省按"还在跑、并发 1"理解。"""
 
     worker_id: str = Field(min_length=1, max_length=64)
+    # Batch14：同一 worker_id 可跑多台进程，用 instance_id 区分（默认 default 兼容老 Worker）
+    instance_id: str = Field(default="default", min_length=1, max_length=64)
     status: str = "running"
     concurrency: int = Field(default=1, ge=1, le=64)
     limit: int = Field(default=1, ge=0, le=64)
@@ -44,6 +46,7 @@ class WorkerBeat(BaseModel):
 
 class WorkerView(BaseModel):
     worker_id: str
+    instance_id: str
     status: str
     online: bool
     last_seen: str
@@ -67,6 +70,7 @@ def _view(row: WorkerRegistry, now: datetime, timeout: int) -> WorkerView:
         meta = None
     return WorkerView(
         worker_id=row.worker_id,
+        instance_id=row.instance_id,
         status=row.status,
         online=online,
         last_seen=last_seen.isoformat(),
@@ -90,10 +94,12 @@ def report_worker(beat: WorkerBeat, db: Session = Depends(get_db)):
         raise HTTPException(status_code=422, detail=f"status 必须是 {sorted(ALLOWED_STATUS)} 之一")
 
     now = datetime.now(timezone.utc)
-    row = db.get(WorkerRegistry, beat.worker_id)
+    key = (beat.worker_id, beat.instance_id)
+    row = db.get(WorkerRegistry, key)
     if row is None:
         row = WorkerRegistry(
             worker_id=beat.worker_id,
+            instance_id=beat.instance_id,
             status=beat.status,
             last_seen=now,
             first_seen=now,
@@ -120,13 +126,20 @@ def report_worker(beat: WorkerBeat, db: Session = Depends(get_db)):
 
 
 @router.get("/api/workers", response_model=List[WorkerView])
-def list_workers(online_only: bool = False, db: Session = Depends(get_db)):
-    """在线列表：`online=true` 只看活的；默认全量（含静默/停机，便于排查"谁掉了"）。"""
+def list_workers(online: bool = False, worker_id: Optional[str] = None,
+                 db: Session = Depends(get_db)):
+    """在线列表：`online=true` 只看活的；`worker_id=` 只看某个执行方的全部实例。
+
+    默认全量（含静默/停机），便于排查"谁掉了"。
+    """
     settings = get_settings()
     timeout = settings.heartbeat_timeout_seconds
     now = datetime.now(timezone.utc)
-    rows = db.execute(select(WorkerRegistry).order_by(WorkerRegistry.last_seen.desc())).scalars().all()
+    stmt = select(WorkerRegistry)
+    if worker_id:
+        stmt = stmt.where(WorkerRegistry.worker_id == worker_id)
+    rows = db.execute(stmt.order_by(WorkerRegistry.last_seen.desc())).scalars().all()
     views = [_view(r, now, timeout) for r in rows]
-    if online_only:
+    if online:
         views = [v for v in views if v.online]
     return views

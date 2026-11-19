@@ -104,6 +104,13 @@ def run_migrate(args, db_url):
                           encoding="utf-8", errors="replace")
 
 
+def pick_instance(rows, worker_id="workbuddy"):
+    """Batch14 起注册表按 (worker_id, instance_id) 分行，真 Worker 默认用主机名。"""
+    want = (socket.gethostname() or "default")[:64]
+    by = {(r["worker_id"], r["instance_id"]): r for r in (rows or [])}
+    return by.get((worker_id, want), {})
+
+
 def sleep_script(tmpdir, seconds, name):
     path = os.path.join(tmpdir, name)
     with open(path, "w", encoding="utf-8") as fh:
@@ -129,8 +136,10 @@ def main() -> int:
     url = f"sqlite:///{DB}"
     proc = run_migrate([], url)
     check("干净库升级成功", proc.returncode == 0, proc.stdout.strip().splitlines()[-1:])
-    check("schema_version 到 5", "schema_version：0 → 5" in proc.stdout or "schema_version：5" in proc.stdout,
-          proc.stdout.strip().splitlines()[-2:])
+    import re as _re
+    _line = _re.search(r"schema_version：[^\n]*", proc.stdout)
+    _nums = [int(x) for x in _re.findall(r"\d+", _line.group(0))] if _line else [0]
+    check("schema_version ≥ 5", max(_nums) >= 5, proc.stdout.strip().splitlines()[-2:])
     check("应用了 v005", "应用 v005" in proc.stdout)
     tables = {r[0] for r in sqlite3.connect(DB).execute(
         "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
@@ -222,7 +231,7 @@ def main() -> int:
                                   encoding="utf-8", errors="replace")
         time.sleep(5)  # 空转窗口：没有任何任务
         code, idle_list = get(base, "/api/workers")
-        idle_row = {w["worker_id"]: w for w in (idle_list or [])}.get("workbuddy", {})
+        idle_row = pick_instance(idle_list)
         check("空转（没有任务）也能在注册表里看到", bool(idle_row), str(idle_row))
         check("空转时 online=true", idle_row.get("online") is True, str(idle_row.get("online")))
         check("空转时 in_flight=0", idle_row.get("in_flight") == 0, str(idle_row.get("in_flight")))
@@ -237,7 +246,7 @@ def main() -> int:
         })
         time.sleep(7)
         code, done_row = get(base, "/api/workers")
-        row = {w["worker_id"]: w for w in (done_row or [])}.get("workbuddy", {})
+        row = pick_instance(done_row)
         check("干完活后 handled ≥1", row.get("handled", 0) >= 1, str(row.get("handled")))
         code, task = get(base, "/api/tasks/t-b13-1")
         check("任务收敛到待验收", (task or {}).get("status") == "待验收", str((task or {}).get("status")))
@@ -246,7 +255,7 @@ def main() -> int:
         worker.wait(timeout=30)
         time.sleep(2)
         code, final = get(base, "/api/workers")
-        fin = {w["worker_id"]: w for w in (final or [])}.get("workbuddy", {})
+        fin = pick_instance(final)
         check("收到 SIGTERM 后状态变成 stopping/stopped", fin.get("status") in ("stopping", "stopped"),
               str(fin.get("status")))
         check("退出后 online=false", fin.get("online") is False, str(fin.get("online")))

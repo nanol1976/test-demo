@@ -25,7 +25,7 @@ def up(conn):
             last_seen      DATETIME     NOT NULL,
             first_seen     DATETIME     NOT NULL,
             concurrency    INTEGER      NOT NULL DEFAULT 1,
-            limit          INTEGER      NOT NULL DEFAULT 1,
+            concurrency_limit INTEGER   NOT NULL DEFAULT 1,
             in_flight      INTEGER      NOT NULL DEFAULT 0,
             handled        INTEGER      NOT NULL DEFAULT 0,
             note           TEXT,

@@ -101,7 +101,7 @@ Worker 干什么由派发报文的 `payload.exec` 决定（白名单目录内的
 | GET | `/api/export/{trace_id}` | 导出台账快照（json / csv） |
 | POST | `/api/commands` | 运维指令：pause / resume / clear-breaker |
 | POST | `/api/workers` | 执行方注册/心跳上报（Batch13；忙闲都报，幂等 upsert） |
-| GET | `/api/workers` | 执行方在线列表（`?online=true` 只看活的） |
+| GET | `/api/workers` | 执行方在线列表（`?online=true` 只看活的；`?worker_id=` 只看某个执行方的全部实例） |
 
 页面：`GET /`（看板）、`GET /static/*`（静态资源，不参与鉴权）。
 
@@ -137,7 +137,7 @@ python deploy/migrate.py --baseline 2 --force  # 已有版本记录时强制重�
 ## 测试与 CI
 
 ```bash
-python scripts/run_all.py            # 一键：verify_b2/b3/b4/b5/b7/b8/b9/b10/b11/b12/b13 + 真实起服务冒烟
+python scripts/run_all.py            # 一键：verify_b2..b14 + 真实起服务冒烟
 python scripts/run_all.py --no-smoke # 跳过冒烟
 python scripts/ci.py                 # CI 门禁：静态红线 + 迁移三段式 + 全量测试
 python scripts/ci.py --static-only   # 只跑静态门禁（快，本地提交前跑）
@@ -158,7 +158,7 @@ CI 门禁查什么：
 | JS 语法 | `node --check app/static/app.js`（本机无 node 则跳过并留痕） |
 | 查询契约 | `q` 参数存在、排序走白名单常量、非法排序抛 ValueError |
 | Worker 红线 | Worker 只走 HTTP：不 `import app.*`、不碰 sqlalchemy；无删除调用 |
-| 执行方注册表 | `worker_registry` 模型 + v005 迁移在；GET/POST 同路径；worker_id 白名单；Worker 周期上报与退出上报齐全 |
+| 执行方注册表 | `worker_registry` 模型 + v005/v006 迁移在；GET/POST 同路径；worker_id 白名单；Worker 周期上报与退出上报齐全；主键 `(worker_id, instance_id)` |
 | 越权/重放 | `_require_owner` 覆盖 heartbeat/return/reject/abort；`task_abort` 允许 master；派发只允许 master；重放指纹拦截存在且早于状态校验 |
 | 派发载荷 | `task_ledger.dispatch_payload` 列在（否则 Worker 轮询拿到任务也拿不到"干什么"） |
 | 迁移 | 空库 --check 不通过 → upgrade 成功 → --check 通过 → 幂等 |
@@ -243,7 +243,7 @@ worker/         agent_worker.py（真 Worker：轮询/执行/心跳/回执）+ e
 deploy/         run.ps1 / run.sh / migrate.py
 migrations/     runner.py + versions/（版本化增量迁移）
 .github/        workflows/ci.yml（接仓库即可用）
-scripts/        init_db / verify_b2..b13 / run_all / smoke_http / ci
+scripts/        init_db / verify_b2..b14 / run_all / smoke_http / ci
 docs/           Batch 任务卡与验收单
 docs/base/      底座规范（架构·SOP·协议·状态机·契约·故障案例…）
 ```

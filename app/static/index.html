@@ -22,7 +22,7 @@
   <section>
     <div class="panel" id="workerPanel">
       <h2>执行方<span class="count" id="workerCount"></span></h2>
-      <p class="hint">优先读执行方注册表（<span class="mono">GET /api/workers</span>）：Worker 忙闲都上报，空转也能看见；<b>在线</b>=状态 running 且最近上报在心跳超时（默认 120s）内，<b>收尾中/停机</b>=Worker 自己报的。平台没有该接口时退回按任务心跳聚合。</p>
+      <p class="hint">优先读执行方注册表（<span class="mono">GET /api/workers</span>）：Worker 忙闲都上报，空转也能看见；<b>在线</b>=状态 running 且最近上报在心跳超时（默认 120s）内，<b>收尾中/停机</b>=Worker 自己报的；同一执行方多个实例分行显示（实例=主机名，可用 <span class="mono">--instance-id</span> 指定）。平台没有该接口时退回按任务心跳聚合。</p>
       <div id="workerTableWrap"><div class="empty">加载中…</div></div>
     </div>
 

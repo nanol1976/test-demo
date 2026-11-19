@@ -143,10 +143,12 @@ POST /api/messages                                    # 报活 / 交活 / 报做
 | 被强杀 | `SIGKILL` 时任务留在「执行中」，由平台 `task_timeout_seconds` / `heartbeat_timeout_seconds` 处置；不会被伪造成成功或失败 |
 | 弹性并发（下限） | `--min-concurrency M` **Batch12**：每轮按积压 `待办+在跑` 算 `limit = clamp(积压, M, N)`，只提交 `limit - 在跑` 个。积压 4 个、上限 4 下限 1 → 并发打开到 4；只剩 1 个活 → 回落到 1。省线程也省上游压力 |
 | 状态可观测 | `--status-file` 每轮落一个小 JSON（`worker_id`/`updated_at`/`concurrency`/`limit`/`backlog`/`in_flight`/`handled`/`poll`），守护脚本与运维直接读它 |
+| 多实例标识（Batch14） | `--instance-id`（默认**主机名**，截断 64 字符）。注册表主键是 `(worker_id, instance_id)`，同机跑两个 Worker 不会互相覆盖 `last_seen`；同机重启沿用同一行，不堆垃圾行 |
 | 注册表上报（Batch13） | `--registry-interval`（默认 15s）往 `POST /api/workers` 报一次：`worker_id/status/concurrency/limit/in_flight/handled/meta`。**忙闲都报**，所以空转的 Worker 在看板上也看得见。收到 SIGTERM 先报 `stopping`、退出前报 `stopped` |
 | 在线判定 | 平台算：`status=running` 且 `last_seen` 在 `heartbeat_timeout_seconds`（默认 120s）内 → 在线；`stopping/stopped` 一律不算在线。平台没有 `/api/workers`（老版本）时 Worker 只记一条 `registry_unsupported`，照常干活 |
 | 与任务心跳的区别 | 任务心跳（`task_heartbeat`）说"某个任务还在跑"并刷新 `last_heartbeat_time`；注册表说"这个进程还活着"。两者互补，缺一个看板就有盲区 |
 | 关闭上报 | `--no-register`（不想被记录时用；不影响领活/回传） |
+| 查询 | `GET /api/workers` 全量 / `?online=true` 只看活的 / `?worker_id=workbuddy` 只看某个执行方的全部实例 |
 
 ## 七、重试
 

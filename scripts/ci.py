@@ -281,6 +281,15 @@ def stage_static():
           "report(\"running\")" in worker_py or "self.report(\"running\")" in worker_py)
     check("Worker 退出时上报 stopping/stopped",
           '"stopping"' in worker_py and '"stopped"' in worker_py)
+    check("注册表主键是 (worker_id, instance_id)（多实例不互相覆盖）",
+          'instance_id: Mapped[str] = mapped_column(String(64), primary_key=True' in model_py)
+    check("迁移 v006 存在", os.path.exists(os.path.join(ROOT, "migrations", "versions",
+                                                       "v006_registry_instance_id.py")))
+    check("注册表列名避开 SQL 关键字（物理列 concurrency_limit）",
+          '"concurrency_limit"' in model_py, "裸写 limit 会语法错误")
+    check("Worker 支持 --instance-id",
+          "--instance-id" in worker_py, "缺参数")
+
     check("Worker 支持 --registry-interval 与 --no-register",
           "--registry-interval" in worker_py and "--no-register" in worker_py)
 
