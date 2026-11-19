@@ -134,3 +134,63 @@ exit=1
 6. `ensure_schema` 自动建表是兜底，生产走 `deploy/migrate.py`
 7. `schema_version` 只有 v1，尚无增量迁移脚本框架（真要换 PG 或加字段时再补 Alembic）
 8. 未做 CI（本轮只做了本地一键脚本）
+
+## 八、收尾补丁：部署脚本加固（2026-11-19 双端实测）
+
+Batch6 首次双端复核时，Mac 端 `pip install` 长时间无进展，查出根因是 **pip 镜像返回 429（限流）**，而非脚本逻辑错。这件事暴露了两个启动脚本的真实缺陷：**它们每次都无条件 `pip install`，一旦镜像限流，"一键启动"就会挂死**。据此做了一轮加固。
+
+### 8.1 改动内容
+
+| # | 文件 | 改动 | 原因 |
+| --- | --- | --- | --- |
+| 1 | `deploy/run.sh` | `echo "安装依赖…"` + 无条件 `pip install` → 先 `python -c "import fastapi, uvicorn, sqlalchemy, pydantic_settings"` 探测，**满足则跳过安装**，不满足才装 | 镜像限流时不再卡死；日常重启秒过 |
+| 2 | `deploy/run.ps1` | 同上，用 `$LASTEXITCODE` 判断；装失败 `exit 1` | 同上 |
+| 3 | `deploy/run.ps1` | 删除 `$Error = $null`（`$Error` 是 PowerShell 自动变量，本不该赋值），改为 `$OutputEncoding` / `[Console]::OutputEncoding` 置 UTF-8 | 中文提示写进重定向日志时乱码 |
+| 4 | `deploy/run.ps1` | 文件存为 **UTF-8 with BOM**（`UTF8Encoding($true)`） | Windows PowerShell 5.1 读"UTF-8 无 BOM + 中文"脚本会解析崩，报"缺少右 }"，且行号错位 |
+
+### 8.2 实测证据
+
+**Windows（`run.ps1`，PowerShell 5.1）**
+
+```
+> powershell -ExecutionPolicy Bypass -File deploy\run.ps1 -Port 8795
+工作目录：C:\Users\longf\codex-workspace\master-worker-platform
+检查依赖…
+  依赖已满足，跳过安装
+执行迁移…
+期望表：['message_archive', 'pipeline_ledger', 'task_ledger']
+→ 补建缺失表：['message_archive', 'pipeline_ledger', 'task_ledger']
+→ 记录 schema_version = 1
+迁移完成，缺表：无
+看板地址：http://127.0.0.1:8795/
+```
+
+同时请求验证：`/` 200、`/api/health` 200、`/api/pipelines?page=1&size=3` 200。日志中文正常（前 3 字节 `239,187,191` 确认带 BOM）。
+
+**macOS（`run.sh`，BSD userland）**
+
+```
+工作目录：/Users/liuhao/codex-workspace/mwp-b6v2/master-worker-platform
+检查依赖…
+  依赖已满足，跳过安装
+执行迁移…
+→ 补建缺失表：['message_archive', 'pipeline_ledger', 'task_ledger']
+→ 记录 schema_version = 1
+迁移完成，缺表：无
+```
+
+请求验证 `/` 200、`/api/health` 200、`/api/pipelines` 200；`file` 判定为 `Bourne-Again shell script text executable, Unicode text, UTF-8 text`，CR 字节数 0（LF 换行未被破坏）。
+
+### 8.3 回归
+
+改动只涉及 `deploy/` 两个脚本，不影响应用代码。双端各跑一次全量：
+
+- Windows `.venv311`：Batch2 / Batch3 / Batch4 / Batch5 / 冒烟 **五段全 PASS**，exit=0
+- macOS（复用 Batch5 已建 venv，规避镜像 429）：同样 **五段全 PASS**
+
+### 8.4 遗留
+
+1. `run.sh` 首次在裸机运行时仍要装依赖，若镜像限流需要人工配源；建议部署文档补一行 `PIP_INDEX_URL` 说明
+2. `run.ps1` 依赖检测只查 4 个顶层包，不查版本号；requirements 升版本时不会自动重装
+3. Mac 端本轮是用 Batch5 的 venv 复用的（`ln -s`），**未验证"全新机器从零建 venv"路径**——该路径受镜像限流阻塞，属环境问题非脚本问题
+
