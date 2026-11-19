@@ -117,6 +117,30 @@ def _require_same_trace(task: Any, envelope: Envelope, action: str) -> None:
 
 # ---------------------------------------------------------------- 各 msg_type
 
+def _require_dispatch_gate(
+    repo: LedgerRepository, pipeline, payload: Dict[str, Any], envelope: Envelope
+) -> None:
+    """派发前的三个闸门：暂停 → 熔断 → 依赖未满足。任一不过都拒绝，且不落状态。"""
+    from app.services.breaker import breaker
+
+    if pipeline is not None and pipeline.pause_flag:
+        raise IllegalTransitionError(
+            f"task_dispatch 被拒：流水线 {pipeline.trace_id} 处于暂停状态，需先 resume"
+        )
+    if breaker.is_open(envelope.trace_id):
+        raise IllegalTransitionError(
+            f"task_dispatch 被拒：流水线 {envelope.trace_id} 已熔断（{breaker.reason(envelope.trace_id)}）"
+        )
+    deps = payload.get("depends_on") or []
+    unmet = []
+    for dep_id in deps:
+        dep = repo.get_task(dep_id)
+        if dep is None or dep.status != "验收通过":
+            unmet.append(f"{dep_id}({dep.status if dep else '不存在'})")
+    if unmet:
+        raise IllegalTransitionError(f"task_dispatch 被拒：依赖未满足 {unmet}")
+
+
 @_idempotent
 def handle_task_dispatch(db: Session, envelope: Envelope) -> HandlerResult:
     payload: Dict[str, Any] = envelope.payload or {}
@@ -127,6 +151,8 @@ def handle_task_dispatch(db: Session, envelope: Envelope) -> HandlerResult:
         pipeline = repo.create_pipeline(
             envelope.trace_id, payload.get("task_goal") or "（未提供 task_goal）"
         )
+
+    _require_dispatch_gate(repo, pipeline, payload, envelope)
 
     task = repo.get_task(envelope.task_id)
     if task is None:

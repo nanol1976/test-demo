@@ -183,7 +183,12 @@ with TestClient(app) as client:
           str(sorted(methods)))
     post = paths["/api/messages"]["post"]
     check("POST /messages 有幂等键说明", "幂等键" in (post.get("description") or ""), "")
-    check("5 个只读/写入接口齐备", len(paths) == 8, str(sorted(paths)))
+    required = {
+        "/api/health", "/api/messages", "/api/pipelines/{trace_id}",
+        "/api/tasks/{task_id}", "/api/archive/{trace_id}",
+        "/api/pipelines", "/api/tasks", "/api/export/{trace_id}",
+    }
+    check("Batch3 必需接口齐备", required.issubset(set(paths)), str(sorted(set(paths) - required)))
     check("导出接口标注 csv 类型",
           "text/csv" in str(paths["/api/export/{trace_id}"]["get"].get("responses", {})), "")
 

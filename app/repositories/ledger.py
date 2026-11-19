@@ -136,6 +136,48 @@ class LedgerRepository:
             stmt = stmt.where(TaskLedger.target_worker == target_worker)
         return len(list(self.db.execute(stmt).scalars().all()))
 
+    # ---- Batch4：超时/心跳/熔断/暂停所需的读取与状态位 ----
+    def list_tasks_by_status(self, status: str) -> List[TaskLedger]:
+        if status not in TASK_STATUSES:
+            raise ValueError(f"非法任务状态: {status}")
+        stmt = select(TaskLedger).where(TaskLedger.status == status)
+        return list(self.db.execute(stmt).scalars().all())
+
+    def last_heartbeat_at(self, task_id: str):
+        from app.models import MessageArchive
+
+        stmt = (
+            select(MessageArchive.timestamp)
+            .where(
+                MessageArchive.task_id == task_id,
+                MessageArchive.msg_type == "task_heartbeat",
+            )
+            .order_by(MessageArchive.timestamp.desc())
+            .limit(1)
+        )
+        return self.db.execute(stmt).scalars().first()
+
+    def count_tasks_by_status_in_trace(self, trace_id: str, status: str) -> int:
+        if status not in TASK_STATUSES:
+            raise ValueError(f"非法任务状态: {status}")
+        stmt = select(TaskLedger).where(
+            TaskLedger.trace_id == trace_id, TaskLedger.status == status
+        )
+        return len(list(self.db.execute(stmt).scalars().all()))
+
+    def set_pause(self, trace_id: str, flag: bool) -> Optional[PipelineLedger]:
+        row = self.db.get(PipelineLedger, trace_id)
+        if row is None:
+            return None
+        row.pause_flag = bool(flag)
+        self.db.commit()
+        self.db.refresh(row)
+        return row
+
+    def list_pipelines_paused(self) -> List[PipelineLedger]:
+        stmt = select(PipelineLedger).where(PipelineLedger.pause_flag == True)  # noqa: E712
+        return list(self.db.execute(stmt).scalars().all())
+
     # ---- 子任务台账 ----
     def create_task(
         self,

@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     api_token: str = ""
     page_size_default: int = 20
     page_size_max: int = 100
+    # Batch4：调度判定参数
+    task_timeout_seconds: int = 3600
+    heartbeat_timeout_seconds: int = 120
+    failure_threshold: int = 3
+    scan_interval_seconds: float = 5.0
 
     class Config:
         env_file = ".env"
