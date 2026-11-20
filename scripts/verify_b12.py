@@ -224,7 +224,7 @@ def main() -> int:
         code, spec = get_json(base, "/openapi.json")
         paths = list((spec or {}).get("paths", {}).keys())
         # 本批做的时候是 9 个（靠任务心跳反推）；Batch13 已把注册表补成第 10 个路径
-        check("接口数 10（Batch13 起含 /api/workers）", len(paths) == 10, f"{len(paths)} 个")
+        check("接口数 11（Batch18 起含 /api/audit）", len(paths) == 11, f"{len(paths)} 个")
         check("在线视图数据源可由 /api/workers 承担（注册表已存在）", "/api/workers" in paths, str(paths))
 
         code, html = request("GET", base + "/")

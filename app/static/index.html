@@ -31,6 +31,16 @@
       <div id="workerTableWrap"><div class="empty">加载中…</div></div>
     </div>
 
+    <div class="panel" id="auditPanel">
+      <h2>运维审计<span class="count" id="auditCount"></span></h2>
+      <p class="hint">最近 20 条运维动作（配额下发 / 暂停 / 恢复 / 复位熔断），来自 <span class="mono">GET /api/audit</span>。<b>生效</b>只针对最新一条配额下发：期望值已写进注册表、且 Worker 自报的并发已等于它才算「已生效」；历史行与流水线指令不判生效（记为 —）。</p>
+      <div class="toolbar">
+        <input id="auditSearch" placeholder="按目标 / 原因筛选（如 workbuddy、DESKTOP）" style="flex:1;min-width:160px">
+        <button class="ghost" id="reloadAudit">刷新</button>
+      </div>
+      <div id="auditTableWrap"><div class="empty">加载中…</div></div>
+    </div>
+
     <div class="panel">
       <h2>流水线<span class="count" id="pipeCount"></span></h2>
       <div class="toolbar">

@@ -180,7 +180,7 @@ def stage_static():
     check("接口方法只有 GET/POST", methods <= {"get", "post"}, ",".join(sorted(methods)))
     # Batch13：9 → 10 个路径（新增 /api/workers 的 GET + POST 共用同一路径）
     unique_paths = sorted(set(routes))
-    check("接口路径为 10 个（Batch13 加执行方注册表）", len(unique_paths) == 10,
+    check("接口路径为 11 个（Batch18 加只读审计查询）", len(unique_paths) == 11,
           f"{len(unique_paths)} 个：{unique_paths}")
 
     # 1.5 协议常量（msg_type 的唯一真源是 schemas 里的 MsgType 枚举）
@@ -342,6 +342,20 @@ def stage_static():
           and wd_code[:wd_guard].count("Register-ScheduledTask") == 0,
           "运行期自注册会导致每分钟重建任务、反复弹窗")
     check("看门狗也用隐藏 VBS 启动", "sh.Run cmd, 0, True" in wd_ps1)
+
+    # 1.5b8 审计覆盖与只读查询（Batch18）
+    audit_py = os.path.join(ROOT, "app", "api", "routes_audit.py")
+    check("审计查询接口文件存在", os.path.exists(audit_py))
+    if os.path.exists(audit_py):
+        atxt = read(audit_py)
+        check("审计查询只有 GET（只读，不给删改入口）",
+              "@router.get(" in atxt and '"/api/audit"' in atxt and "db.commit(" not in atxt
+              and "db.add(" not in atxt and "DELETE" not in atxt)
+    cmds_py = read(os.path.join(ROOT, "app", "api", "routes_commands.py"))
+    check("流水线指令也落审计（pause/resume/clear-breaker）",
+          "_audit(db, command=payload.command" in cmds_py, "流水线指令没留痕")
+    check("看板有运维审计面板与生效判定",
+          'id="auditPanel"' in html and "loadAudit" in js and "auditEffective" in js)
 
     # 1.5c 越权与重放红线（Batch10）：权限校验不能被"顺手删掉"
     dispatch_py = read(os.path.join(ROOT, "app", "services", "dispatch.py"))

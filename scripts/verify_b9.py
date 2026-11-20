@@ -216,7 +216,7 @@ def main() -> int:
         code, spec = get(BASE, "/openapi.json")
         paths = list(spec["paths"].keys()) if code == 200 else []
         methods = {m.upper() for p in spec["paths"].values() for m in p} if code == 200 else set()
-        check("接口数 10（唯一新增是 Batch13 的 /api/workers）", len(paths) == 10, f"{len(paths)} 个")
+        check("接口数 11（Batch18 起含 /api/audit）", len(paths) == 11, f"{len(paths)} 个")
         check("方法只有 GET/POST", methods <= {"GET", "POST"}, str(sorted(methods)))
 
         print("=== B 派发：执行方归属与载荷落库 ===")

@@ -33,6 +33,7 @@ SCRIPTS = [
     ("Batch15 实例并发配额下发/看板筛选", "verify_b15.py"),
     ("Batch16 并发配额下发审计（append-only）", "verify_b16.py"),
     ("Batch17 Windows 计划任务静默化（不弹窗）", "verify_b17.py"),
+    ("Batch18 审计覆盖全部指令 + 只读查询接口", "verify_b18.py"),
 ]
 
 

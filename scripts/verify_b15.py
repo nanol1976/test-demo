@@ -307,7 +307,7 @@ def main() -> int:
         print("=== D 看板与接口面 ===")
         code, spec = get(base, "/openapi.json")
         paths = sorted((spec or {})["paths"].keys())
-        check("路径仍 10 个（配额走已有指令通道）", len(paths) == 10, str(len(paths)))
+        check("路径 11 个（配额没再加接口，11 = 10 + Batch18 审计）", len(paths) == 11, str(len(paths)))
         methods = {m for p in (spec or {})["paths"].values() for m in p}
         check("方法只有 GET/POST", methods <= {"get", "post"}, str(methods))
         code, html = request("GET", base + "/", raw=True)

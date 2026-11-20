@@ -6,6 +6,10 @@
 - master:clear-breaker  仅复位熔断标志，不改暂停状态
 - master:worker-limit   给某个执行方实例下发期望并发上限（Batch15）
 
+Batch18：四条指令**全部**落审计（`worker_quota_audit`，append-only）。
+暂停/恢复/复位熔断这三条是流水线级的，没有"实例"这个概念，审计里用
+`worker_id='master'`、`instance_id='trace:<trace_id>'` 表示目标，`desired_limit` 记 0。
+
 Batch15 的动机：Worker 自报的 concurrency 只是"我现在开几个"，平台没法要求它开几个。
 弹性并发的上限如果只能靠改命令行重启进程，就没法在运行中收放。这里复用同一条指令通道
 （不新增路径、方法仍是 POST），让平台把 desired_limit 写进注册表，Worker 在下一次
@@ -87,6 +91,10 @@ def post_command(payload: CommandRequest, db: Session = Depends(get_db)) -> Comm
     else:
         breaker.reset(payload.trace_id)
 
+    # Batch18：流水线级指令也留痕（同一张审计表，不改结构）
+    _audit(db, command=payload.command, worker_id="master",
+           instance_id=f"trace:{payload.trace_id}", reason=payload.reason)
+    db.commit()
     logger.info(
         "运维指令：%s trace=%s reason=%s", payload.command, payload.trace_id, payload.reason
     )
@@ -117,16 +125,11 @@ def _worker_limit(payload: CommandRequest, db: Session) -> CommandResult:
     prev = int(row.desired_limit or 0)
     new_limit = int(payload.limit)
     row.desired_limit = new_limit
-    # Batch16：每次下发都落一行审计（append-only，不更新不删除）。
+    # Batch16/18：每次下发都落一行审计（append-only，不更新不删除）。
     # 和注册表分开：注册表只留最新值，审计表留住"改过几次、从几改到几、为什么"。
-    db.add(WorkerQuotaAudit(
-        worker_id=row.worker_id,
-        instance_id=row.instance_id,
-        desired_limit=new_limit,
-        prev_limit=prev,
-        command=payload.command,
-        reason=payload.reason,
-    ))
+    _audit(db, command=payload.command, worker_id=row.worker_id,
+           instance_id=row.instance_id, desired_limit=new_limit, prev_limit=prev,
+           reason=payload.reason)
     db.commit()
     db.refresh(row)
     logger.info("并发配额下发：%s/%s desired=%s reason=%s",
@@ -138,3 +141,17 @@ def _worker_limit(payload: CommandRequest, db: Session) -> CommandResult:
         instance_id=row.instance_id,
         desired_limit=row.desired_limit,
     )
+
+
+def _audit(db: Session, command: str, worker_id: str, instance_id: str,
+           desired_limit: int = 0, prev_limit: int = 0,
+           reason: Optional[str] = None) -> None:
+    """审计落一行。四条指令共用，`command` 列区分是哪一条。"""
+    db.add(WorkerQuotaAudit(
+        worker_id=worker_id,
+        instance_id=instance_id,
+        desired_limit=desired_limit,
+        prev_limit=prev_limit,
+        command=command,
+        reason=reason,
+    ))

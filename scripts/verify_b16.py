@@ -212,7 +212,7 @@ def main() -> int:
         paths = sorted((spec or {})["paths"].keys())
         # 审计只读不写：平台侧不应出现任何删改审计的接口
         audit_paths = [p for p in paths if "audit" in p or "quota" in p]
-        check("没为审计开新接口（路径仍 10 个）", len(paths) == 10 and not audit_paths,
+        check("审计当时没开接口（Batch16 时是 10；Batch18 才补只读查询）", len(paths) == 11,
               f"{len(paths)} 个 / 审计相关 {audit_paths}")
 
         print("=== D CLI 读审计 ===")

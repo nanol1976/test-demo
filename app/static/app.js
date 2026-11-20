@@ -10,6 +10,7 @@ const ROUTES = {
   archive: (t) => `/api/archive/${encodeURIComponent(t)}`,
   commands: "/api/commands",
   workers: "/api/workers",
+  audit: "/api/audit",
 };
 
 const STATUS_STYLE = {
@@ -32,6 +33,8 @@ const state = {
   q: "", sort: "start_time_desc", trace: null, autoMs: 0,
   // Batch15：执行方视图筛选（默认全看；纯客户端过滤，不打多余请求）
   workerFilter: "", workerOnlineOnly: false, workerInstance: "",
+  // Batch18：运维审计筛选
+  auditKeyword: "",
 };
 
 const API_TIMEOUT_MS = 30000;
@@ -564,6 +567,91 @@ async function loadWorkers() {
   }
 }
 
+
+/* ---------- 运维审计（Batch18） ---------- */
+let lastAudit = null;
+
+function auditEffective(v) {
+  if (v === true) return { label: "已生效", cls: "ok" };
+  if (v === false) return { label: "未生效", cls: "bad" };
+  return { label: "—", cls: "idle" };
+}
+
+function renderAudit(view) {
+  const wrap = el("auditTableWrap");
+  if (!wrap) return;
+  lastAudit = view;
+  const items = (view && view.items) || [];
+  const kw = state.auditKeyword.trim().toLowerCase();
+  const shown = items.filter((it) => {
+    if (!kw) return true;
+    const target = `${it.worker_id}/${it.instance_id}`.toLowerCase();
+    return target.includes(kw) || (it.reason || "").toLowerCase().includes(kw) || it.command.includes(kw);
+  });
+  const meta = (view && view.meta) || { total: 0 };
+  el("auditCount").textContent = items.length
+    ? `（显示 ${shown.length} / 最近 ${items.length} 条，共 ${meta.total} 条）` : "";
+  if (!items.length) {
+    wrap.innerHTML = '<div class="empty">还没有运维动作记录</div>';
+    return;
+  }
+  if (!shown.length) {
+    wrap.innerHTML = '<div class="empty">没有匹配的记录</div>';
+    return;
+  }
+  const table = document.createElement("table");
+  const head = document.createElement("tr");
+  ["时间", "动作", "目标", "旧→新", "是否生效", "原因"].forEach((h) => {
+    const th = document.createElement("th");
+    th.textContent = h;
+    head.appendChild(th);
+  });
+  table.appendChild(head);
+  shown.forEach((it) => {
+    const tr = document.createElement("tr");
+    tr.appendChild(td(new Date(it.created_at).toLocaleString()));
+    tr.appendChild(td(it.command.replace("master:", ""), "mono"));
+    tr.appendChild(td(`${it.worker_id}/${it.instance_id}`, "mono"));
+    const isQuota = it.command === "master:worker-limit";
+    tr.appendChild(td(isQuota ? `${it.prev_limit}→${it.desired_limit}` : "—", isQuota ? "" : "muted"));
+    const eff = auditEffective(isQuota ? it.effective : null);
+    const cell = document.createElement("td");
+    const span = document.createElement("span");
+    span.className = "tag " + eff.cls;
+    span.textContent = eff.label;
+    cell.appendChild(span);
+    tr.appendChild(cell);
+    tr.appendChild(td(it.reason || "—", "muted"));
+    table.appendChild(tr);
+  });
+  const cur = (view && view.current) || {};
+  const keys = Object.keys(cur);
+  if (keys.length) {
+    const note = document.createElement("div");
+    note.className = "empty";
+    note.textContent = "注册表当前：" + keys.map((k) =>
+      `${k} 期望=${cur[k].desired_limit || "—"} 并发=${cur[k].concurrency} ${cur[k].online ? "在线" : "静默"}`
+    ).join("；");
+    table.appendChild(note);
+  }
+  wrap.innerHTML = "";
+  wrap.appendChild(table);
+}
+
+async function loadAudit() {
+  const wrap = el("auditTableWrap");
+  try {
+    const r = await api(`${ROUTES.audit}?limit=20`);
+    if (!r.ok) {
+      if (wrap) wrap.innerHTML = `<div class="empty">审计读取失败：${r.status}</div>`;
+      return;
+    }
+    renderAudit(r.body);
+  } catch (e) {
+    if (wrap) wrap.innerHTML = `<div class="empty">审计请求异常：${e}</div>`;
+  }
+}
+
 async function loadDetail(traceId, opts = {}) {
   const silent = !!opts.silent;
   if (!silent) clearResult("cmdResult");
@@ -601,6 +689,7 @@ async function refreshOnce() {
   try {
     await checkHealth();
     await loadWorkers();
+    await loadAudit();
     await loadPipelines();
     if (state.trace) await loadDetail(state.trace, { silent: true });
     markRefreshed();
@@ -761,6 +850,9 @@ function bind() {
   el("workerFilter").addEventListener("change", (e) => { state.workerFilter = e.target.value; renderRegistry(lastWorkers); });
   el("workerOnlineOnly").addEventListener("change", (e) => { state.workerOnlineOnly = e.target.checked; renderRegistry(lastWorkers); });
   el("workerInstanceSearch").addEventListener("input", (e) => { state.workerInstance = e.target.value; renderRegistry(lastWorkers); });
+
+  el("auditSearch").addEventListener("input", (e) => { state.auditKeyword = e.target.value; renderAudit(lastAudit); });
+  el("reloadAudit").addEventListener("click", loadAudit);
 
   el("pipeStatus").addEventListener("change", (e) => { state.status = e.target.value; state.page = 1; loadPipelines(); });
   el("pipeSort").addEventListener("change", (e) => { state.sort = e.target.value; state.page = 1; loadPipelines(); });
