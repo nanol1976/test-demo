@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.core.clock import ensure_utc
 from app.core.config import get_settings
-from app.core.security import require_token
+from app.core.security import require_token, require_write
 from app.models import WorkerRegistry
 
 router = APIRouter(dependencies=[Depends(require_token)])
@@ -89,7 +89,8 @@ def _view(row: WorkerRegistry, now: datetime, timeout: int) -> WorkerView:
 
 
 @router.post("/api/workers", response_model=WorkerView, status_code=202)
-def report_worker(beat: WorkerBeat, db: Session = Depends(get_db)):
+def report_worker(beat: WorkerBeat, db: Session = Depends(get_db),
+                  role: str = Depends(require_write)):
     """Worker 注册/心跳上报（幂等 upsert：同一 worker_id 只更新，不新增行）。"""
     if beat.worker_id not in ALLOWED_WORKERS:
         raise HTTPException(status_code=409, detail=f"worker_id 必须是 {sorted(ALLOWED_WORKERS)} 之一")

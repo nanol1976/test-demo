@@ -33,7 +33,9 @@ if ROOT not in sys.path:
 
 # 门禁永远跑「无鉴权」模式（Batch27）：仓库里一旦有 .env（正式 API_TOKEN），
 # 验收脚本的请求会被 401 打回，红的是环境不是代码。空串优先于 .env，等于显式关掉鉴权。
+# Batch28：只读口令也是鉴权开关，一起清空——只清全权那一枚的话，无口令请求会变 401。
 os.environ["API_TOKEN"] = ""
+os.environ["API_TOKEN_READONLY"] = ""
 
 FAILS = []
 
@@ -485,6 +487,28 @@ def stage_static():
     css2 = read(os.path.join(ROOT, "app", "static", "style.css"))
     check("窄屏样式存在（手机单栏 + 表格横滚）",
           "@media (max-width: 640px)" in css2 and "min-width: 560px" in css2)
+
+    # 1.8b Batch28：只读口令——写接口必须在服务端拦，不能靠前端藏按钮
+    sec_py = read(os.path.join(ROOT, "app", "core", "security.py"))
+    cfg_py = read(os.path.join(ROOT, "app", "core", "config.py"))
+    main_py = read(os.path.join(ROOT, "app", "main.py"))
+    write_routes = "".join(read(os.path.join(ROOT, "app", "api", name)) for name in
+                           ("routes_commands.py", "routes_messages.py", "routes_workers.py"))
+    check("Batch28 只读口令有配置项（api_token_readonly）", "api_token_readonly" in cfg_py)
+    check("Batch28 有 require_write 依赖（只读→403）", "def require_write" in sec_py and "403" in sec_py)
+    check("Batch28 三条写接口都挂了 require_write",
+          write_routes.count("Depends(require_write)") == 3,
+          f"{write_routes.count('Depends(require_write)')} 处")
+    check("Batch28 权限档由中间件写进 X-API-Mode 头",
+          "MODE_HEADER" in main_py and "middleware" in main_py)
+    check("Batch28 看板能切只读态（读头 + 禁用写入口 + 只读章）",
+          "X-API-Mode" in read(os.path.join(ROOT, "app", "static", "app.js"))
+          and "applyMode" in read(os.path.join(ROOT, "app", "static", "app.js"))
+          and 'id="modeBadge"' in read(os.path.join(ROOT, "app", "static", "index.html")))
+    check("Batch28 只读章有样式", ".mode-badge" in css2)
+    check("Batch28 只读口令进 .env 时与全权分开（不共用一个变量名）",
+          "API_TOKEN_READONLY" in inst2 or "API_TOKEN_READONLY" in sec_py,
+          "环境变量名没落地")
 
     # 1.9 查询契约：关键字与排序走白名单（不许把 sort 直通给 SQL）
     queries_py = read(os.path.join(ROOT, "app", "api", "routes_queries.py"))

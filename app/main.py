@@ -2,7 +2,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect
@@ -14,6 +14,7 @@ from app.api.deps import get_engine, get_session_factory
 from app.bus import MessageBus
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
+from app.core.security import MODE_HEADER, TOKEN_HEADER, resolve_role
 from app.models import Base
 from app.services.scheduler import Scheduler
 
@@ -76,7 +77,18 @@ app = FastAPI(
 )
 
 # 健康检查 / 报文 / 台账 / 运维指令
-app.include_router(health_router, prefix="/api", tags=["health"])
+app.include_router(health_router, prefix="/api", tags=["health"])# --- Batch28：把「这枚口令能干什么」告诉前端 ---
+# 只读档不靠前端自觉：写操作在服务端 403。这里只负责把档位写在响应头里，
+# 让看板能显示成「只读」而不是点一下才报错。
+@app.middleware("http")
+async def tag_api_mode(request: Request, call_next):
+    role = resolve_role(request.headers.get(TOKEN_HEADER))
+    response = await call_next(request)
+    if role is not None:
+        response.headers[MODE_HEADER] = role
+    return response
+
+
 app.include_router(routes_messages.router, prefix="/api", tags=["messages"])
 app.include_router(routes_queries.router, prefix="/api", tags=["ledger"])
 app.include_router(routes_commands.router, prefix="/api", tags=["commands"])

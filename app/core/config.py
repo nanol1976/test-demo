@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     bus_capacity: int = 1000
     bus_workers: int = 2
     api_token: str = ""
+    # Batch28：只读口令。给手机／外发查看用，只能读台账，不能下发指令。
+    # 留空 = 不启用只读档（配了这一枚就只认「全权」那一枚）。
+    api_token_readonly: str = ""
     page_size_default: int = 20
     page_size_max: int = 100
     # Batch4：调度判定参数

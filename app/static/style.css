@@ -42,6 +42,20 @@
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 
+/* Batch28：只读口令的章。用警戒色，做成方章而不是圆点标签。 */
+.mode-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border: 1px solid var(--warn);
+  border-radius: 2px;
+  color: var(--warn);
+  font-size: 12px;
+  letter-spacing: 1px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.mode-badge[hidden] { display: none; }
+
 body {
   margin: 0;
   background: var(--sheet);

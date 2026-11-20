@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.core.logging import get_logger
-from app.core.security import require_token
+from app.core.security import require_token, require_write
 from app.models import WorkerQuotaAudit, WorkerRegistry
 from app.repositories.ledger import LedgerRepository
 from app.services.breaker import breaker
@@ -75,7 +75,8 @@ class CommandResult(BaseModel):
     ),
 )
 def post_command(payload: CommandRequest, db: Session = Depends(get_db),
-                 operator: Optional[str] = Header(default=None, alias="X-Operator")) -> CommandResult:
+                 operator: Optional[str] = Header(default=None, alias="X-Operator"),
+                 role: str = Depends(require_write)) -> CommandResult:
     if payload.command not in ALLOWED_COMMANDS:
         raise HTTPException(status_code=400, detail=f"未知指令: {payload.command}")
 

@@ -19,7 +19,9 @@ if ROOT not in sys.path:
 
 # 验收永远跑「无鉴权」模式（Batch27）：仓库里有 .env（正式 token）时，
 # 各 verify 脚本的请求否则会被 401 打回，红的是环境不是代码。
+# Batch28：只读口令同样算鉴权开关，两枚都要清空。
 os.environ["API_TOKEN"] = ""
+os.environ["API_TOKEN_READONLY"] = ""
 
 SCRIPTS = [
     ("Batch2 消息总线", "verify_b2.py"),
@@ -44,6 +46,7 @@ SCRIPTS = [
     ("Batch25 explorer 守护 + data/ 每日巡检", "verify_b25.py"),
     ("Batch26 看板：停滞/时间轴/心跳/快照", "verify_b26.py"),
     ("Batch27 手机访问：绑定可配 + token + 窄屏", "verify_b27.py"),
+    ("Batch28 只读口令：能看不能动", "verify_b28.py"),
 ]
 
 

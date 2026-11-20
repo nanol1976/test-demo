@@ -18,7 +18,7 @@ from app.bus import BusBackpressureError, BusTimeoutError, MessageBus
 from app.bus.router import HandlerResult, Router, UnknownMsgTypeError, VALID_MSG_TYPES
 from app.core.clock import ensure_utc
 from app.core.logging import get_logger
-from app.core.security import require_token
+from app.core.security import require_token, require_write
 from app.models import MessageArchive
 from app.repositories.ledger import LedgerRepository
 from app.schemas import Envelope
@@ -118,7 +118,8 @@ def _task_view(task) -> TaskView:
     ),
     responses={400: {"model": ErrorBody}, 409: {"model": ErrorBody}, 422: {"model": ErrorBody}},
 )
-def post_message(raw: Dict[str, Any] = Body(...)) -> MessageAccepted:
+def post_message(raw: Dict[str, Any] = Body(...),
+                 role: str = Depends(require_write)) -> MessageAccepted:
     """收一条报文：入总线 → 路由 → 状态迁移 → 归档。"""
     msg_type = raw.get("msg_type")
     if msg_type not in VALID_MSG_TYPES:

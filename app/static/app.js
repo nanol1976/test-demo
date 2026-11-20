@@ -38,6 +38,8 @@ const state = {
   // Batch22：审计分页（服务端 offset 翻页）+ 操作者
   auditPage: 1, auditPages: 1, auditTotal: 0,
   operator: "",
+  // Batch28：当前口令的权限档（full / readonly）；由服务端的 X-API-Mode 头回填
+  mode: "full",
 };
 
 const API_TIMEOUT_MS = 30000;
@@ -55,6 +57,25 @@ const HEARTBEAT_WARN_MS = WORKER_ONLINE_MS;  // 与平台心跳超时同口径
 const SNAP_TZ = "本地时间";
 
 function el(id) { return document.getElementById(id); }
+
+// Batch28：只读口令的界面表现。真正的拦截在服务端（403），这里只是别让人白点。
+const WRITE_BTNS = ["btnPause", "btnResume", "btnClearBreaker", "sendMsg"];
+
+function applyMode() {
+  const ro = state.mode === "readonly";
+  WRITE_BTNS.forEach((id) => {
+    const node = el(id);
+    if (!node) return;
+    node.disabled = ro;
+    if (ro) node.title = "只读口令不能下发指令";
+  });
+  const badge = el("modeBadge");
+  if (badge) {
+    badge.hidden = !ro;
+    badge.textContent = ro ? "只读" : "";
+  }
+  document.body.classList.toggle("readonly-mode", ro);
+}
 
 function styleFor(value) {
   const hit = STATUS_STYLE[value];
@@ -86,6 +107,12 @@ async function api(path, options = {}) {
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
   try {
     const resp = await fetch(path, Object.assign({}, options, { headers, signal: controller.signal }));
+    // Batch28：服务端回填权限档。只读口令下把「只读」亮出来，并禁掉写操作入口。
+    const mode = resp.headers.get("X-API-Mode");
+    if (mode && mode !== state.mode) {
+      state.mode = mode;
+      applyMode();
+    }
     let body = null;
     const type = resp.headers.get("content-type") || "";
     if (type.includes("application/json")) {
@@ -627,6 +654,10 @@ function filteredWorkers(workers) {
 }
 
 async function setWorkerLimit(w, raw) {
+  if (state.mode === "readonly") {
+    showResult("workerCmdResult", false, "当前是只读口令，不能改并发配额");
+    return;
+  }
   const limit = String(raw || "").trim();
   const body = {
     command: "master:worker-limit",
@@ -950,6 +981,10 @@ function setAutoRefresh(ms) {
 }
 
 async function sendCommand(command) {
+  if (state.mode === "readonly") {
+    showResult("cmdResult", false, "当前是只读口令，不能下发指令（换全权口令再发）");
+    return;
+  }
   if (!state.trace) {
     showResult("cmdResult", false, "先选一条流水线");
     return;
@@ -1009,6 +1044,10 @@ function nowIso() {
 }
 
 async function sendMessage() {
+  if (state.mode === "readonly") {
+    showResult("msgResult", false, "当前是只读口令，不能投递报文（换全权口令再发）");
+    return;
+  }
   const raw = el("msgBody").value.trim();
   if (!raw) {
     showResult("msgResult", false, "报文为空");
@@ -1238,6 +1277,7 @@ el("tokenInput").value = state.token;
 state.operator = localStorage.getItem(OPERATOR_KEY) || "";
 el("operatorInput").value = state.operator;
 bind();
+applyMode();
 checkHealth();
 loadWorkers();
 loadAudit();
