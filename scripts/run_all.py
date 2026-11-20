@@ -30,6 +30,7 @@ SCRIPTS = [
     ("Batch12 执行方在线视图/弹性并发", "verify_b12.py"),
     ("Batch13 执行方注册表/精确在线", "verify_b13.py"),
     ("Batch14 多实例标识（worker_id + instance_id）", "verify_b14.py"),
+    ("Batch15 实例并发配额下发/看板筛选", "verify_b15.py"),
 ]
 
 

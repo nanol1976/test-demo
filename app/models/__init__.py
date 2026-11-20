@@ -33,6 +33,11 @@ class WorkerRegistry(Base):
     limit: Mapped[int] = mapped_column("concurrency_limit", Integer, nullable=False, default=1)
     in_flight: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     handled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Batch15：平台下发的期望并发上限。0 = 没设过，Worker 按自己的 --concurrency 跑。
+    # 单独一列而不是复用 concurrency：concurrency 是 Worker 自报的"我现在的上限"，
+    # 两者分开才能看出"下发了但没生效"这种故障。
+    desired_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=0,
+                                               server_default="0")
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     meta: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

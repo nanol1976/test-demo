@@ -39,6 +39,7 @@ from datetime import datetime, timezone
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
 
+HARD_MAX_CONCURRENCY = 64  # 并发硬上限：注册表 / API / 线程池共用一个口径
 ALLOWED_SENDERS = ("master", "dsh", "workbuddy", "codex", "user")
 ACTIVE_STATUS = "执行中"
 
@@ -213,7 +214,10 @@ class WorkerAgent:
         self.state_file = state_file
         self.status_file = status_file
         # 弹性并发：min 是下限（至少同时跑几个），concurrency 是上限
-        self.concurrency = max(1, int(concurrency))
+        self.concurrency = max(1, min(int(concurrency), HARD_MAX_CONCURRENCY))
+        # Batch15：记住本地配置的上限。平台撤销配额（desired_limit=0）时要回到这个值，
+        # 否则下过一次配额就永久改掉了进程自己的配置。
+        self.local_concurrency = self.concurrency
         self.min_concurrency = max(1, min(int(min_concurrency), self.concurrency))
         # Batch13：注册表上报
         self.registry_interval = max(1.0, float(registry_interval))
@@ -272,6 +276,34 @@ class WorkerAgent:
             return
         if code not in (200, 202):
             log("registry_failed", status=status, http=code, body=body)
+            return
+        # Batch15：平台的"期望并发上限"随上报响应回来（不额外开接口、不多打一次请求）
+        if isinstance(body, dict):
+            self._apply_desired_limit(body.get("desired_limit"))
+
+    def _apply_desired_limit(self, desired) -> None:
+        """平台下发配额：>0 生效（夹在 min_concurrency..64 之间），0/缺失=撤销、保持本地配置。"""
+        try:
+            desired = int(desired)
+        except (TypeError, ValueError):
+            return
+        if desired <= 0:
+            # 撤销：回到本地 --concurrency 配置
+            target = self.local_concurrency
+            if target == self.concurrency:
+                return
+            prev, self.concurrency = self.concurrency, target
+            log("limit_restored", worker_id=self.worker_id, instance_id=self.instance_id,
+                prev=prev, now=target)
+            self._write_status(limit_changed=target)
+            return
+        target = max(self.min_concurrency, min(desired, HARD_MAX_CONCURRENCY))
+        if target == self.concurrency:
+            return
+        prev, self.concurrency = self.concurrency, target
+        log("limit_applied", worker_id=self.worker_id, instance_id=self.instance_id,
+            desired=desired, prev=prev, now=target)
+        self._write_status(limit_changed=target)
 
     def _write_status(self, **fields) -> None:
         """守护进程/运维要看的那点信息，落一个小 JSON 文件（不占接口、不进台账）。"""
@@ -446,8 +478,10 @@ class WorkerAgent:
             registry = Registry(self, self.registry_interval)
             registry.start()
 
+        # Batch15：线程池按硬上限建（线程懒创建、不吃资源），实跑并发由 self.concurrency 闸住。
+        # 若按 self.concurrency 建池，平台上调配额时会卡在池容量上，配额等于白下发。
         executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=self.concurrency, thread_name_prefix="mw-task"
+            max_workers=HARD_MAX_CONCURRENCY, thread_name_prefix="mw-task"
         )
 
         def _drain(timeout: float) -> None:

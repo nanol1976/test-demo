@@ -56,6 +56,8 @@ class WorkerView(BaseModel):
     limit: int
     in_flight: int
     handled: int
+    # Batch15：平台下发的期望并发上限（0 = 未下发，Worker 按自己 --concurrency 跑）
+    desired_limit: int = 0
     note: Optional[str] = None
     meta: Optional[dict] = None
 
@@ -80,6 +82,7 @@ def _view(row: WorkerRegistry, now: datetime, timeout: int) -> WorkerView:
         limit=row.limit,
         in_flight=row.in_flight,
         handled=row.handled,
+        desired_limit=row.desired_limit,
         note=row.note,
         meta=meta,
     )

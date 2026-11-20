@@ -22,7 +22,12 @@
   <section>
     <div class="panel" id="workerPanel">
       <h2>执行方<span class="count" id="workerCount"></span></h2>
-      <p class="hint">优先读执行方注册表（<span class="mono">GET /api/workers</span>）：Worker 忙闲都上报，空转也能看见；<b>在线</b>=状态 running 且最近上报在心跳超时（默认 120s）内，<b>收尾中/停机</b>=Worker 自己报的；同一执行方多个实例分行显示（实例=主机名，可用 <span class="mono">--instance-id</span> 指定）。平台没有该接口时退回按任务心跳聚合。</p>
+      <p class="hint">优先读执行方注册表（<span class="mono">GET /api/workers</span>）：Worker 忙闲都上报，空转也能看见；<b>在线</b>=状态 running 且最近上报在心跳超时（默认 120s）内，<b>收尾中/停机</b>=Worker 自己报的；同一执行方多个实例分行显示（实例=主机名，可用 <span class="mono">--instance-id</span> 指定）。平台没有该接口时退回按任务心跳聚合。Batch15 起可在「配额」列直接给某个实例下发期望并发上限（0 或留空=撤销、恢复 Worker 自己的配置），Worker 下一次上报（默认 15s）即生效，在飞任务不会被杀。</p>
+      <div class="toolbar">
+        <select id="workerFilter"><option value="">全部执行方</option></select>
+        <label class="muted"><input type="checkbox" id="workerOnlineOnly"> 仅在线</label>
+        <input id="workerInstanceSearch" placeholder="按实例名筛选（如主机名）" style="flex:1;min-width:140px">
+      </div>
       <div id="workerTableWrap"><div class="empty">加载中…</div></div>
     </div>
 

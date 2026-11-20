@@ -227,7 +227,10 @@ def stage_static():
         check(f"Worker 支持 {flag}", flag in worker_py, "参数缺失")
     check("Worker 收到 SIGTERM 会优雅退出（signal_stop）",
           "signal_stop" in worker_py and "SIGTERM" in worker_py, "缺信号处理")
-    check("Worker 并发用线程池且有上限", "ThreadPoolExecutor" in worker_py and "max_workers=self.concurrency" in worker_py)
+    check("Worker 并发用线程池且有上限",
+          "ThreadPoolExecutor" in worker_py
+          and ("max_workers=self.concurrency" in worker_py
+               or "max_workers=HARD_MAX_CONCURRENCY" in worker_py))
     templates = {
         "deploy/worker-systemd.service": ["Restart=always", "TimeoutStopSec=90", "agent_worker.py"],
         "deploy/worker-launchd.plist": ["KeepAlive", "ExitTimeOut", "agent_worker.py"],
@@ -292,6 +295,24 @@ def stage_static():
 
     check("Worker 支持 --registry-interval 与 --no-register",
           "--registry-interval" in worker_py and "--no-register" in worker_py)
+
+    # 1.5b5 并发配额下发红线（Batch15）
+    check("迁移 v007 存在", os.path.exists(os.path.join(ROOT, "migrations", "versions",
+                                                       "v007_worker_desired_limit.py")))
+    check("注册表有 desired_limit 列（与 concurrency 分开，才能看出下发没生效）",
+          "desired_limit" in model_py)
+    cmds_py = read(os.path.join(ROOT, "app", "api", "routes_commands.py"))
+    check("指令白名单含 master:worker-limit", "master:worker-limit" in cmds_py)
+    check("未注册实例不下发配额（404，防止注册表被塞假行）",
+          "执行方实例不存在" in cmds_py, "缺 404 分支")
+    check("Worker 会应用平台下发的配额", "_apply_desired_limit" in worker_py)
+    check("撤销配额的路径在（回到本地 --concurrency）",
+          "limit_restored" in worker_py, "撤销后永久改配置")
+    check("线程池不被配额卡死（按硬上限建池）",
+          "max_workers=HARD_MAX_CONCURRENCY" in worker_py)
+    check("看板有执行方筛选与配额下发入口",
+          'id="workerFilter"' in html and 'id="workerOnlineOnly"' in html
+          and "master:worker-limit" in js)
 
     # 1.5c 越权与重放红线（Batch10）：权限校验不能被"顺手删掉"
     dispatch_py = read(os.path.join(ROOT, "app", "services", "dispatch.py"))

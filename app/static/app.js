@@ -30,6 +30,8 @@ const STATUS_STYLE = {
 const state = {
   token: "", page: 1, size: 20, pages: 1, total: 0, status: "",
   q: "", sort: "start_time_desc", trace: null, autoMs: 0,
+  // Batch15：执行方视图筛选（默认全看；纯客户端过滤，不打多余请求）
+  workerFilter: "", workerOnlineOnly: false, workerInstance: "",
 };
 
 const API_TIMEOUT_MS = 30000;
@@ -417,25 +419,79 @@ function workerRegistryState(w) {
   return { label: "静默", cls: "bad" };
 }
 
+function syncWorkerFilterOptions(workers) {
+  const sel = el("workerFilter");
+  if (!sel) return;
+  const ids = Array.from(new Set(workers.map((w) => w.worker_id))).sort();
+  const current = state.workerFilter;
+  sel.innerHTML = '<option value="">全部执行方</option>';
+  ids.forEach((id) => {
+    const op = document.createElement("option");
+    op.value = id;
+    op.textContent = id;
+    sel.appendChild(op);
+  });
+  sel.value = ids.indexOf(current) >= 0 ? current : "";
+  if (sel.value !== current) state.workerFilter = sel.value;
+}
+
+function filteredWorkers(workers) {
+  const kw = state.workerInstance.trim().toLowerCase();
+  return workers.filter((w) => {
+    if (state.workerFilter && w.worker_id !== state.workerFilter) return false;
+    if (state.workerOnlineOnly && !w.online) return false;
+    if (kw && !String(w.instance_id || "default").toLowerCase().includes(kw)) return false;
+    return true;
+  });
+}
+
+async function setWorkerLimit(w, raw) {
+  const limit = String(raw || "").trim();
+  const body = {
+    command: "master:worker-limit",
+    worker_id: w.worker_id,
+    instance_id: w.instance_id || "default",
+    limit: limit === "" ? 0 : Number(limit),
+    reason: "看板手动下发",
+  };
+  const panel = el("workerTableWrap");
+  if (!Number.isFinite(body.limit) || body.limit < 0 || body.limit > 64) {
+    if (panel) panel.setAttribute("data-last-cmd", "期望并发必须是 0~64 的整数");
+    return;
+  }
+  const r = await api(ROUTES.commands, { method: "POST", body: JSON.stringify(body) });
+  const msg = r.ok
+    ? `已下发 ${body.worker_id}/${body.instance_id} 期望并发=${r.body.desired_limit}（0=撤销），Worker 下次上报生效`
+    : `下发失败：${r.status} ${JSON.stringify(r.body)}`;
+  if (panel) panel.setAttribute("data-last-cmd", msg);
+  loadWorkers();
+}
+
 function renderRegistry(workers) {
   const wrap = el("workerTableWrap");
   if (!wrap) return;
+  syncWorkerFilterOptions(workers);
+  const shown = filteredWorkers(workers);
   el("workerCount").textContent = workers.length
-    ? `（在线 ${workers.filter((w) => w.online).length} / 共 ${workers.length} 个实例）`
+    ? `（在线 ${workers.filter((w) => w.online).length} / 共 ${workers.length} 个实例${shown.length !== workers.length ? `，当前显示 ${shown.length}` : ""}）`
     : "";
   if (!workers.length) {
     wrap.innerHTML = '<div class="empty">还没有 Worker 上报过（启动 Worker 并接入 /api/workers 即可）</div>';
     return;
   }
+  if (!shown.length) {
+    wrap.innerHTML = '<div class="empty">当前筛选条件下没有实例（清空筛选可看全部）</div>';
+    return;
+  }
   const table = document.createElement("table");
   const head = document.createElement("tr");
-  ["执行方", "实例", "状态", "在跑", "并发", "累计完成", "最近上报", "备注"].forEach((h) => {
+  ["执行方", "实例", "状态", "在跑", "并发", "期望上限", "配额下发", "累计完成", "最近上报", "备注"].forEach((h) => {
     const th = document.createElement("th");
     th.textContent = h;
     head.appendChild(th);
   });
   table.appendChild(head);
-  workers.forEach((w) => {
+  shown.forEach((w) => {
     const tr = document.createElement("tr");
     tr.appendChild(td(w.worker_id, "mono"));
     tr.appendChild(td(w.instance_id || "default", "mono"));
@@ -448,6 +504,22 @@ function renderRegistry(workers) {
     tr.appendChild(stCell);
     tr.appendChild(td(`${w.in_flight}`));
     tr.appendChild(td(`${w.limit}/${w.concurrency}`));
+    tr.appendChild(td(w.desired_limit ? String(w.desired_limit) : "—", w.desired_limit ? "" : "muted"));
+    const quotaCell = document.createElement("td");
+    const input = document.createElement("input");
+    input.type = "number";
+    input.min = "0";
+    input.max = "64";
+    input.value = w.desired_limit ? String(w.desired_limit) : "";
+    input.placeholder = "0~64";
+    input.style.width = "56px";
+    const btn = document.createElement("button");
+    btn.textContent = "下发";
+    btn.className = "ghost";
+    btn.addEventListener("click", () => setWorkerLimit(w, input.value));
+    quotaCell.appendChild(input);
+    quotaCell.appendChild(btn);
+    tr.appendChild(quotaCell);
     tr.appendChild(td(String(w.handled)));
     tr.appendChild(td(new Date(w.last_seen).toLocaleTimeString()));
     tr.appendChild(td(w.note || "—", "muted"));
@@ -455,13 +527,23 @@ function renderRegistry(workers) {
   });
   wrap.innerHTML = "";
   wrap.appendChild(table);
+  const last = wrap.getAttribute("data-last-cmd");
+  if (last) {
+    const note = document.createElement("div");
+    note.className = "empty";
+    note.textContent = last;
+    wrap.appendChild(note);
+  }
 }
+
+let lastWorkers = [];
 
 async function loadWorkers() {
   // Batch13：优先读执行方注册表；平台老版本（没有该接口）时退回按任务聚合。
   try {
     const reg = await api(ROUTES.workers);
     if (reg.ok && Array.isArray(reg.body)) {
+      lastWorkers = reg.body;
       renderRegistry(reg.body);
       return;
     }
@@ -675,6 +757,11 @@ function bind() {
       scheduleAuto();
     }
   });
+  // Batch15：执行方筛选（纯客户端过滤，不再打后端）
+  el("workerFilter").addEventListener("change", (e) => { state.workerFilter = e.target.value; renderRegistry(lastWorkers); });
+  el("workerOnlineOnly").addEventListener("change", (e) => { state.workerOnlineOnly = e.target.checked; renderRegistry(lastWorkers); });
+  el("workerInstanceSearch").addEventListener("input", (e) => { state.workerInstance = e.target.value; renderRegistry(lastWorkers); });
+
   el("pipeStatus").addEventListener("change", (e) => { state.status = e.target.value; state.page = 1; loadPipelines(); });
   el("pipeSort").addEventListener("change", (e) => { state.sort = e.target.value; state.page = 1; loadPipelines(); });
   let searchTimer = null;
