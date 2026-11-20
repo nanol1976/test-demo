@@ -1,30 +1,5 @@
-# 统一换行符：仓库内一律 LF（写成 CRLF 会把 run.sh / *.sh 在 Linux 上跑坏）
-* text=auto eol=lf
-
-# PowerShell / 批处理必须是 CRLF（Windows 原生解析器认这个）
+# Windows 部署件必须是 CRLF：wscript/cscript 与 PowerShell 5.1 对 LF 都不友好，
+# 而 git 在 Linux 侧提交时默认会把 CRLF 归一成 LF —— 用属性把交付物钉死。
+*.vbs text eol=crlf
 *.ps1 text eol=crlf
 *.bat text eol=crlf
-*.cmd text eol=crlf
-
-# 二进制，不做换行归一
-*.png binary
-*.jpg binary
-*.ico binary
-*.gz binary
-*.tar.gz binary
-*.db binary
-
-# 前端与文档明确用 LF
-*.py text eol=lf
-*.js text eol=lf
-*.css text eol=lf
-*.html text eol=lf
-*.md text eol=lf
-*.yml text eol=lf
-*.yaml text eol=lf
-*.json text eol=lf
-*.sh text eol=lf
-*.txt text eol=lf
-
-# git 钩子必须是 LF 且带可执行位，否则 Git for Windows 调不起来
-.githooks/* text eol=lf
