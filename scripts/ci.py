@@ -402,6 +402,8 @@ def stage_static():
     check("看板有搜索框与排序下拉", 'id="pipeSearch"' in html and 'id="pipeSort"' in html)
     check("列表请求带 q 与 sort", 'query.set("q", state.q)' in app_js and 'query.set("sort", state.sort)' in app_js)
     check("行级差量渲染（listRows/taskRows）", "const listRows" in app_js and "const taskRows" in app_js)
+    check("启动时首刷审计面板（Batch18 漏了 loadAudit，面板会永远停在「加载中」）",
+          "loadWorkers();\nloadAudit();" in app_js, "启动脚本没首刷审计")
 
     # 1.10 JS 语法（有 node 才查；无 node 不算失败，但要留痕）
     js_path = os.path.join(ROOT, "app", "static", "app.js")

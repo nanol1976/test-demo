@@ -515,7 +515,7 @@ function renderRegistry(workers) {
     input.max = "64";
     input.value = w.desired_limit ? String(w.desired_limit) : "";
     input.placeholder = "0~64";
-    input.style.width = "56px";
+    input.style.width = "68px";
     const btn = document.createElement("button");
     btn.textContent = "下发";
     btn.className = "ghost";
@@ -892,5 +892,6 @@ el("tokenInput").value = state.token;
 bind();
 checkHealth();
 loadWorkers();
+loadAudit();
 loadPipelines();
 setAutoRefresh(localStorage.getItem(AUTO_KEY) || 0);

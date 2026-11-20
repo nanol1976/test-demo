@@ -22,7 +22,7 @@
   <section>
     <div class="panel" id="workerPanel">
       <h2>执行方<span class="count" id="workerCount"></span></h2>
-      <p class="hint">优先读执行方注册表（<span class="mono">GET /api/workers</span>）：Worker 忙闲都上报，空转也能看见；<b>在线</b>=状态 running 且最近上报在心跳超时（默认 120s）内，<b>收尾中/停机</b>=Worker 自己报的；同一执行方多个实例分行显示（实例=主机名，可用 <span class="mono">--instance-id</span> 指定）。平台没有该接口时退回按任务心跳聚合。Batch15 起可在「配额」列直接给某个实例下发期望并发上限（0 或留空=撤销、恢复 Worker 自己的配置），Worker 下一次上报（默认 15s）即生效，在飞任务不会被杀。</p>
+      <details class="hint"><summary>这一栏在看什么</summary><p>优先读执行方注册表（<span class="mono">GET /api/workers</span>）：Worker 忙闲都上报，空转也能看见；<b>在线</b>=状态 running 且最近上报在心跳超时（默认 120s）内，<b>收尾中/停机</b>=Worker 自己报的；同一执行方多个实例分行显示（实例=主机名，可用 <span class="mono">--instance-id</span> 指定）。平台没有该接口时退回按任务心跳聚合。Batch15 起可在「配额」列直接给某个实例下发期望并发上限（0 或留空=撤销、恢复 Worker 自己的配置），Worker 下一次上报（默认 15s）即生效，在飞任务不会被杀。</p></details>
       <div class="toolbar">
         <select id="workerFilter"><option value="">全部执行方</option></select>
         <label class="muted"><input type="checkbox" id="workerOnlineOnly"> 仅在线</label>
@@ -33,7 +33,7 @@
 
     <div class="panel" id="auditPanel">
       <h2>运维审计<span class="count" id="auditCount"></span></h2>
-      <p class="hint">最近 20 条运维动作（配额下发 / 暂停 / 恢复 / 复位熔断），来自 <span class="mono">GET /api/audit</span>。<b>生效</b>只针对最新一条配额下发：期望值已写进注册表、且 Worker 自报的并发已等于它才算「已生效」；历史行与流水线指令不判生效（记为 —）。</p>
+      <details class="hint"><summary>「生效」是怎么判的</summary><p>最近 20 条运维动作（配额下发 / 暂停 / 恢复 / 复位熔断），来自 <span class="mono">GET /api/audit</span>。<b>生效</b>只针对最新一条配额下发：期望值已写进注册表、且 Worker 自报的并发已等于它才算「已生效」；历史行与流水线指令不判生效（记为 —）。</p></details>
       <div class="toolbar">
         <input id="auditSearch" placeholder="按目标 / 原因筛选（如 workbuddy、DESKTOP）" style="flex:1;min-width:160px">
         <button class="ghost" id="reloadAudit">刷新</button>
