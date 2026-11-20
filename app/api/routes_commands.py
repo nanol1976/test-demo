@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.core.logging import get_logger
 from app.core.security import require_token
-from app.models import WorkerRegistry
+from app.models import WorkerQuotaAudit, WorkerRegistry
 from app.repositories.ledger import LedgerRepository
 from app.services.breaker import breaker
 
@@ -114,7 +114,19 @@ def _worker_limit(payload: CommandRequest, db: Session) -> CommandResult:
             detail=f"执行方实例不存在：{payload.worker_id}/{instance_id}（先让它上报一次）",
         )
 
-    row.desired_limit = int(payload.limit)
+    prev = int(row.desired_limit or 0)
+    new_limit = int(payload.limit)
+    row.desired_limit = new_limit
+    # Batch16：每次下发都落一行审计（append-only，不更新不删除）。
+    # 和注册表分开：注册表只留最新值，审计表留住"改过几次、从几改到几、为什么"。
+    db.add(WorkerQuotaAudit(
+        worker_id=row.worker_id,
+        instance_id=row.instance_id,
+        desired_limit=new_limit,
+        prev_limit=prev,
+        command=payload.command,
+        reason=payload.reason,
+    ))
     db.commit()
     db.refresh(row)
     logger.info("并发配额下发：%s/%s desired=%s reason=%s",

@@ -50,6 +50,35 @@ class WorkerRegistry(Base):
     )
 
 
+class WorkerQuotaAudit(Base):
+    """并发配额下发审计（Batch16）。
+
+    注册表只留"当前期望值"，改过几次、谁改的、从几改到几，全都看不到。
+    运维要回答"这个实例的配额外谁动过"时，只能去翻日志。
+    所以单开一张 append-only 审计表：每次 master:worker-limit 落一行，不更新、不删除。
+
+    与台账同为"只追加"，但它记的是运维动作而不是业务结果，所以单独一张表。
+    """
+
+    __tablename__ = "worker_quota_audit"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    worker_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    instance_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 改完之后的值 与 改之前的值（-1 表示这一行之前没有下发过记录）
+    desired_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    prev_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    command: Mapped[str] = mapped_column(String(64), nullable=False, default="master:worker-limit")
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False,
+                                                 default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("desired_limit >= 0 AND desired_limit <= 64", name="ck_quota_audit_range"),
+        Index("ix_worker_quota_audit_target", "worker_id", "instance_id", "created_at"),
+    )
+
+
 class PipelineLedger(Base):
     __tablename__ = "pipeline_ledger"
 

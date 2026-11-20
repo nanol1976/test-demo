@@ -314,6 +314,17 @@ def stage_static():
           'id="workerFilter"' in html and 'id="workerOnlineOnly"' in html
           and "master:worker-limit" in js)
 
+    # 1.5b6 配额审计红线（Batch16）
+    check("迁移 v008 存在", os.path.exists(os.path.join(ROOT, "migrations", "versions",
+                                                       "v008_worker_quota_audit.py")))
+    check("审计模型 WorkerQuotaAudit 在", "class WorkerQuotaAudit" in model_py)
+    check("下发配额时同时落审计", "db.add(WorkerQuotaAudit" in cmds_py, "漏审计")
+    check("审计表是只追加（代码里没有删改审计记录）",
+          "delete(WorkerQuotaAudit" not in cmds_py
+          and "DELETE FROM worker_quota_audit" not in cmds_py, "审计被允许改写")
+    check("审计查询走 CLI（没为它开接口）",
+          os.path.exists(os.path.join(ROOT, "scripts", "quota_audit.py")))
+
     # 1.5c 越权与重放红线（Batch10）：权限校验不能被"顺手删掉"
     dispatch_py = read(os.path.join(ROOT, "app", "services", "dispatch.py"))
     owner_calls = re.findall(r"_require_owner\(task, envelope, \"task_(\w+)\"", dispatch_py)
