@@ -1,4 +1,4 @@
-﻿# 一键注册 Windows 三个计划任务（Batch23）
+﻿# 一键注册 Windows 计划任务（Batch23 建三个，Batch25 加 MW-Guard）
 #
 # 用法（普通用户即可，不需要管理员）：
 #   powershell -NoProfile -ExecutionPolicy Bypass -File deploy\install-windows-tasks.ps1
@@ -9,10 +9,11 @@
 # 为什么要有这个脚本：
 #   Batch17 之后三个任务的动作都改成了 wscript.exe 跑隐藏 VBS（不建控制台，才不闪窗），
 #   但注册脚本只存在于"某台机器的 run\ 或手敲的命令历史"里——换一台机器、换一个人，
-#   根本不知道 MW-Platform 该怎么注册。这里把三件事收进一个仓库内的脚本：
+#   根本不知道 MW-Platform 该怎么注册。这里把四件事收进一个仓库内的脚本：
 #     1) 生成 run\worker-run.bat（worker 的命令行只有这一份真相）
 #     2) 注册 MW-Platform / MW-Worker / MW-Watchdog，动作统一 wscript + 隐藏 VBS
-#     3) 三个任务都是「登录触发 + 每分钟重复 + IgnoreNew」，等于常驻自愈
+#     3) 注册 MW-Guard（Batch25）：explorer 现场快照 + 死了就拉起 + 每天一次 data/ 巡检
+#     4) 四个任务都是「登录触发 + 每分钟重复 + IgnoreNew」，等于常驻自愈
 #
 # 幂等：重复跑会 -Force 覆盖同名任务，不会堆出重复任务。
 # 不做的事：不猜 python 路径（用仓库内的 .venv311），不动数据库，不杀进程。
@@ -48,7 +49,8 @@ $BaseUrl = "http://127.0.0.1:$Port"
 $Tasks = @(
     @{ Name = "MW-Platform"; Vbs = (Join-Path $Repo "deploy\launch-platform-hidden.vbs") },
     @{ Name = "MW-Worker";   Vbs = (Join-Path $Repo "deploy\launch-worker-hidden.vbs") },
-    @{ Name = "MW-Watchdog"; Vbs = (Join-Path $Repo "deploy\launch-watchdog-hidden.vbs") }
+    @{ Name = "MW-Watchdog"; Vbs = (Join-Path $Repo "deploy\launch-watchdog-hidden.vbs") },
+    @{ Name = "MW-Guard";    Vbs = (Join-Path $Repo "deploy\launch-guard-hidden.vbs") }
 )
 
 function Say($m) { Write-Host $m }
@@ -108,7 +110,7 @@ if ($DryRun) {
     Say "已生成：$Bat"
 }
 
-# ---------- 2) 注册三个任务 ----------
+# ---------- 2) 注册四个任务 ----------
 function New-MwTask($Name, $Vbs) {
     $Action = New-ScheduledTaskAction -Execute "wscript.exe" `
         -Argument "//nologo `"$Vbs`"" -WorkingDirectory $Repo
@@ -145,6 +147,6 @@ if (-not $DryRun) {
     Say ""
     Say "核对：Get-ScheduledTask -TaskName 'MW-*' | Format-Table TaskName, State"
     Say "       Get-ScheduledTask -TaskName 'MW-*' | Get-ScheduledTaskInfo"
-    Say "日志：$LogDir\platform.out.log / worker.out.log / watchdog.log"
+    Say "日志：$LogDir\platform.out.log / worker.out.log / watchdog.log / explorer-guard.log"
     Say ("看板：http://127.0.0.1:$Port/")
 }

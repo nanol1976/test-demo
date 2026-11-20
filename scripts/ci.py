@@ -404,11 +404,12 @@ def stage_static():
 
     # 1.5b10 Windows 部署件入库（Batch23）：不许再出现"注册脚本只活在某人机器上"
     for rel in ("deploy/launch-platform-hidden.vbs", "deploy/launch-worker-hidden.vbs",
-                "deploy/launch-watchdog-hidden.vbs", "deploy/install-windows-tasks.ps1"):
+                "deploy/launch-watchdog-hidden.vbs", "deploy/install-windows-tasks.ps1",
+                "deploy/launch-guard-hidden.vbs", "deploy/explorer-guard.ps1"):
         check(f"部署件在仓库里：{rel}", os.path.exists(os.path.join(ROOT, rel)))
     inst = read(os.path.join(ROOT, "deploy", "install-windows-tasks.ps1"))
-    check("三个计划任务由同一个脚本注册（不许再散落）",
-          all(f'"{n}"' in inst for n in ("MW-Platform", "MW-Worker", "MW-Watchdog")))
+    check("四个计划任务由同一个脚本注册（不许再散落）",
+          all(f'"{n}"' in inst for n in ("MW-Platform", "MW-Worker", "MW-Watchdog", "MW-Guard")))
     check("任务动作是 wscript 跑隐藏 VBS（否则会闪控制台）",
           'Execute "wscript.exe"' in inst and "//nologo" in inst)
     check("安装脚本幂等且有卸载入口", "-Force | Out-Null" in inst and "-Uninstall" in inst)
@@ -423,7 +424,17 @@ def stage_static():
           all(open(os.path.join(ROOT, r), "rb").read(3) == b"\xef\xbb\xbf"
               for r in ("deploy/install-windows-tasks.ps1",
                         "deploy/worker-windows-watchdog.ps1",
-                        "deploy/worker-windows-task.ps1")))
+                        "deploy/worker-windows-task.ps1",
+                        "deploy/explorer-guard.ps1")))
+
+    # 1.5b12 explorer 守护红线（Batch25）：守护可以清残留，但绝不许碰生产库
+    guard = read(os.path.join(ROOT, "deploy", "explorer-guard.ps1"))
+    guard_body = "\n".join(l for l in guard.splitlines() if not l.strip().startswith("#"))
+    check("守护脚本把 mvp.db 写进保留白名单", '$keep = @("mvp.db")' in guard)
+    check("守护脚本清理限定在白名单里（不在白名单的只报告）", "不在清理白名单里" in guard)
+    check("守护脚本不自己注册任务（运行时只许注销）",
+          "Register-ScheduledTask" not in guard_body)
+    check("守护脚本默认只报告，清理要显式加 -AutoCleanData", "$AutoCleanData" in guard and "只报告" in guard)
 
     # 1.5b11 库地址红线（Batch24）：默认值不许再指向空库名
     cfg_py = read(os.path.join(ROOT, "app", "core", "config.py"))
