@@ -248,7 +248,9 @@ def main() -> int:
         check("launchd：参数里带 agent_worker.py 与 concurrency",
               any("agent_worker.py" in str(a) for a in pl.get("ProgramArguments", []))
               and "--concurrency" in pl.get("ProgramArguments", []))
-        ps1 = open(os.path.join(ROOT, "deploy", "worker-windows-task.ps1"), encoding="utf-8").read()
+        # Batch23：Windows 注册只剩一份（install-windows-tasks.ps1），老入口只是转发
+        ps1 = open(os.path.join(ROOT, "deploy", "install-windows-tasks.ps1"),
+                   encoding="utf-8-sig").read()
         check("Windows：注册计划任务 + 禁止多实例 + 自动重启",
               "Register-ScheduledTask" in ps1 and "MultipleInstances IgnoreNew" in ps1
               and "RestartCount 999" in ps1)

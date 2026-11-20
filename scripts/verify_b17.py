@@ -42,40 +42,45 @@ def read(rel):
 
 
 def main() -> int:
-    task = read("deploy/worker-windows-task.ps1")
+    inst = read("deploy/install-windows-tasks.ps1")
     wd = read("deploy/worker-windows-watchdog.ps1")
+    vbs_worker = read("deploy/launch-worker-hidden.vbs")
+    vbs_wd = read("deploy/launch-watchdog-hidden.vbs")
+    vbs_plat = read("deploy/launch-platform-hidden.vbs")
 
-    print("=== A Worker 任务模板：动作是隐藏 VBS ===")
-    check("任务动作用 wscript.exe", '-Execute "wscript.exe"' in task)
-    check("不再直接挂 cmd.exe 作为任务动作", '-Execute "cmd.exe"' not in task,
+    print("=== A 三个任务的动作用隐藏 VBS（Batch23：启动器已入库） ===")
+    check("任务动作用 wscript.exe", '-Execute "wscript.exe"' in inst)
+    check("不再直接挂 cmd.exe 作为任务动作", '-Execute "cmd.exe"' not in inst,
           "直接挂 cmd.exe 会在桌面闪控制台窗口")
-    check("生成隐藏启动器 launch-worker-hidden.vbs", "launch-worker-hidden.vbs" in task)
-    check("VBS 用 Run(cmd, 0, True)：隐藏 + 等待",
-          re.search(r"sh\.Run cmd, 0, True", task) is not None,
-          "缺 0/True，窗口会闪或任务状态不反映存活")
-    check("注释里写明为什么不用 cmd（可读性/防回退）", "闪" in task or "控制台" in task)
+    check("隐藏启动器在仓库里（不是装在某人机器的 run\\ 里）",
+          all(x in inst for x in ("launch-platform-hidden.vbs", "launch-worker-hidden.vbs",
+                                  "launch-watchdog-hidden.vbs")))
+    for name, body in (("platform", vbs_plat), ("worker", vbs_worker), ("watchdog", vbs_wd)):
+        check(f"{name} 启动器用 Run(cmd, 0, True)：隐藏 + 等待",
+              re.search(r"sh\.Run cmd, 0, True", body) is not None,
+              "缺 0/True，窗口会闪或任务状态不反映存活")
+    check("注释里写明为什么不用 cmd（可读性/防回退）",
+          any("控制台" in b or "闪" in b for b in (vbs_plat, vbs_worker, vbs_wd)))
 
-    print("=== B 看门狗模板：运行时不自注册 ===")
-    # 看门狗里的 Register-ScheduledTask 必须被 -Install 开关包住（只看代码，注释不算）
+    print("=== B 看门狗：运行时彻底不自注册 ===")
     wd_code = code_only(wd)
-    reg_idx = wd_code.rfind("Register-ScheduledTask")
-    guard_idx = wd_code.find("if ($Install)")
-    check("有 -Install 开关", "param(" in wd and "[switch]$Install" in wd)
-    check("Register-ScheduledTask 在 -Install 分支内",
-          reg_idx != -1 and guard_idx != -1 and guard_idx < reg_idx,
-          f"reg@{reg_idx} guard@{guard_idx}")
-    check("看门狗运行时不自注册（-Force 只在 Install 段落出现）",
-          wd_code.count("Register-ScheduledTask") == 1 and "-Force" in wd_code[guard_idx:])
-    check("看门狗动作指向隐藏 VBS", "wscript" in wd or "launch-watchdog-hidden.vbs" in wd)
-    check("看门狗自身用 Run(cmd, 0, True)", re.search(r"sh\.Run cmd, 0, True", wd) is not None)
+    check("有 -Install 开关（兼容老入口）", "param(" in wd and "[switch]$Install" in wd)
+    check("看门狗正文里没有任何 Register-ScheduledTask",
+          "Register-ScheduledTask" not in wd_code, "注册逻辑必须只在安装脚本里")
+    check("-Install 分支转发给 install-windows-tasks.ps1",
+          "install-windows-tasks.ps1" in wd)
     check("看门狗循环不会自己跑循环（每次唤起只查一轮）",
           "while (" not in wd and "for (" not in wd)
+    check("看门狗仍然查平台健康与 Worker 在线",
+          "api/health" in wd and "/api/workers" in wd)
 
-    print("=== C 注册参数仍然对 ===")
-    for label, text in (("Worker", task), ("Watchdog", wd)):
-        check(f"{label} 任务仍是 Limited（普通用户可装）", "RunLevel Limited" in text)
-        check(f"{label} 任务仍是 IgnoreNew（重复触发被忽略）", "IgnoreNew" in text)
-    check("Worker 任务仍带失败重启兜底", "RestartCount" in task)
+    print("=== C 注册参数仍然对（看真正注册的那份脚本） ===")
+    check("三个任务都登记（平台/Worker/看门狗）",
+          all(f'"{n}"' in inst for n in ("MW-Platform", "MW-Worker", "MW-Watchdog")))
+    check("任务仍是 Limited（普通用户可装）", "RunLevel Limited" in inst)
+    check("任务仍是 IgnoreNew（重复触发被忽略）", "MultipleInstances IgnoreNew" in inst)
+    check("任务仍带失败重启兜底", "RestartCount" in inst)
+    check("注册幂等（重跑不堆重复任务）", "-Force | Out-Null" in inst)
 
     print("=== D 文档同步 ===")
     doc = read("docs/base/09-Worker契约.md")

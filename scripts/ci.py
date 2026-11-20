@@ -234,7 +234,8 @@ def stage_static():
     templates = {
         "deploy/worker-systemd.service": ["Restart=always", "TimeoutStopSec=90", "agent_worker.py"],
         "deploy/worker-launchd.plist": ["KeepAlive", "ExitTimeOut", "agent_worker.py"],
-        "deploy/worker-windows-task.ps1": ["Register-ScheduledTask", "agent_worker.py", "RestartCount"],
+        "deploy/install-windows-tasks.ps1": ["Register-ScheduledTask", "agent_worker.py", "RestartCount"],
+        "deploy/worker-windows-task.ps1": ["install-windows-tasks.ps1"],
     }
     missing_tpl = []
     for rel, needles in templates.items():
@@ -325,23 +326,22 @@ def stage_static():
     check("审计查询走 CLI（没为它开接口）",
           os.path.exists(os.path.join(ROOT, "scripts", "quota_audit.py")))
 
-    # 1.5b7 Windows 计划任务静默化红线（Batch17）
+    # Batch23 起注册只剩一份：install-windows-tasks.ps1；隐藏启动器是 deploy 下的 launch-*.vbs
     task_ps1 = read(os.path.join(ROOT, "deploy", "worker-windows-task.ps1"))
+    inst_ps1 = read(os.path.join(ROOT, "deploy", "install-windows-tasks.ps1"))
     wd_ps1 = read(os.path.join(ROOT, "deploy", "worker-windows-watchdog.ps1"))
-    check("Worker 任务动作用 wscript（不直接挂 cmd，避免桌面闪窗）",
-          '-Execute "wscript.exe"' in task_ps1 and '-Execute "cmd.exe"' not in task_ps1)
+    check("三个任务动作用 wscript（不直接挂 cmd，避免桌面闪窗）",
+          '-Execute "wscript.exe"' in inst_ps1 and '-Execute "cmd.exe"' not in inst_ps1)
+    launchers = [read(os.path.join(ROOT, "deploy", f)) for f in
+                 ("launch-platform-hidden.vbs", "launch-worker-hidden.vbs", "launch-watchdog-hidden.vbs")]
     check("隐藏启动器用 sh.Run cmd, 0, True（隐藏 + 等待子进程）",
-          "sh.Run cmd, 0, True" in task_ps1, "0 或 True 缺一个就会出现窗口/状态失真")
-    wd_code = re.sub(r"<#[\s\S]*?#>", "",
-                     "\n".join(ln for ln in wd_ps1.splitlines()
-                               if not ln.lstrip().startswith("#")))
-    wd_guard = wd_code.find("if ($Install)")
-    wd_reg = wd_code.rfind("Register-ScheduledTask")
-    check("看门狗运行时不自注册（注册只在 -Install）",
-          "[switch]$Install" in wd_ps1 and wd_guard != -1 and wd_reg > wd_guard
-          and wd_code[:wd_guard].count("Register-ScheduledTask") == 0,
+          all("sh.Run cmd, 0, True" in b for b in launchers),
+          "0 或 True 缺一个就会出现窗口/状态失真")
+    wd_code = "\n".join(ln for ln in wd_ps1.splitlines() if not ln.lstrip().startswith("#"))
+    check("看门狗运行时不自注册（注册只在人工执行安装脚本时）",
+          "[switch]$Install" in wd_ps1 and "Register-ScheduledTask" not in wd_code,
           "运行期自注册会导致每分钟重建任务、反复弹窗")
-    check("看门狗也用隐藏 VBS 启动", "sh.Run cmd, 0, True" in wd_ps1)
+    check("看门狗由隐藏启动器拉起", "sh.Run cmd, 0, True" in launchers[2])
 
     # 1.5b8 审计覆盖与只读查询（Batch18）
     audit_py = os.path.join(ROOT, "app", "api", "routes_audit.py")
@@ -401,6 +401,29 @@ def stage_static():
 
     found = runner.discover()
     check("迁移文件可发现且递增", len(found) >= 2 and all(found[i].version < found[i + 1].version for i in range(len(found) - 1)), f"{[m.version for m in found]}")
+
+    # 1.5b10 Windows 部署件入库（Batch23）：不许再出现"注册脚本只活在某人机器上"
+    for rel in ("deploy/launch-platform-hidden.vbs", "deploy/launch-worker-hidden.vbs",
+                "deploy/launch-watchdog-hidden.vbs", "deploy/install-windows-tasks.ps1"):
+        check(f"部署件在仓库里：{rel}", os.path.exists(os.path.join(ROOT, rel)))
+    inst = read(os.path.join(ROOT, "deploy", "install-windows-tasks.ps1"))
+    check("三个计划任务由同一个脚本注册（不许再散落）",
+          all(f'"{n}"' in inst for n in ("MW-Platform", "MW-Worker", "MW-Watchdog")))
+    check("任务动作是 wscript 跑隐藏 VBS（否则会闪控制台）",
+          'Execute "wscript.exe"' in inst and "//nologo" in inst)
+    check("安装脚本幂等且有卸载入口", "-Force | Out-Null" in inst and "-Uninstall" in inst)
+    wdog = read(os.path.join(ROOT, "deploy", "worker-windows-watchdog.ps1"))
+    wdog_body = "\n".join(l for l in wdog.splitlines() if not l.strip().startswith("#"))
+    check("看门狗运行时不自注册（Batch17 的病不许复发）",
+          "Register-ScheduledTask" not in wdog_body)
+    check("部署件不写死用户名目录（换机器能直接用）",
+          not re.search(r"C:\\Users\\[^\\]+\\codex-workspace", inst))
+
+    check("Windows 部署脚本带 UTF-8 BOM（PS 5.1 无 BOM 会把中文按 ANSI 解析，直接语法崩）",
+          all(open(os.path.join(ROOT, r), "rb").read(3) == b"\xef\xbb\xbf"
+              for r in ("deploy/install-windows-tasks.ps1",
+                        "deploy/worker-windows-watchdog.ps1",
+                        "deploy/worker-windows-task.ps1")))
 
     # 1.9 查询契约：关键字与排序走白名单（不许把 sort 直通给 SQL）
     queries_py = read(os.path.join(ROOT, "app", "api", "routes_queries.py"))
