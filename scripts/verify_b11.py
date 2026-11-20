@@ -26,6 +26,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 PY = sys.executable
 
+from _proc_drain import drain  # 子进程日志必须读走：Windows 管道写满会把服务堵死
+
 DB = "./data/verify_b11.db"
 ARCHIVE = "./archive/_verify_b11"
 TOKEN = "verify-token"
@@ -139,11 +141,12 @@ def main() -> int:
         cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace",
     )
+    srv_log = drain(server)  # 必须读走 stdout，否则 Windows 上管道写满会把服务堵死
     status_file = os.path.join(tmpdir, "worker_status.json")
     try:
         check("真起服务", wait_up(base))
         if FAILS and "真起服务" in FAILS:
-            print((server.stdout.read() if server.stdout else "")[-1500:])
+            print("".join(srv_log[-40:])[-1500:])
             return 1
 
         print("=== A 并发：3 个 4 秒任务，--concurrency 3 ===")
@@ -207,22 +210,30 @@ def main() -> int:
                                  stderr=subprocess.STDOUT, text=True,
                                  encoding="utf-8", errors="replace")
         time.sleep(3)  # 让它真的开始跑
-        check("执行中状态先确认", task_status(base, "t-b11-g-1") == "执行中",
-              task_status(base, "t-b11-g-1"))
-        proc3.send_signal(signal.SIGTERM)
-        stopped_at = time.time()
-        try:
-            out3, _ = proc3.communicate(timeout=40)
-        except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            # Windows 没有 POSIX 信号语义：send_signal(SIGTERM) 落到 TerminateProcess（硬杀），
+            # 「等到收尾、日志有 signal_stop」这些断言在 Windows 上不可能成立。
+            # 这里明确跳过，而不是把断言放宽成假绿。
+            print("  [SKIP] 优雅退出 4 项：Windows 上信号即硬杀，grace/回执断言不适用")
             proc3.kill()
-            out3, _ = proc3.communicate()
-        grace_used = round(time.time() - stopped_at, 1)
-        log3 = proc3.stdout.read() if False else (out3 or "")
-        check("收到 SIGTERM 后进程正常退出（rc=0）", proc3.returncode == 0, f"rc={proc3.returncode}")
-        check("退出前等到任务收尾（用时 >3s）", grace_used > 3, f"{grace_used}s")
-        check("日志记录了 signal_stop", "signal_stop" in log3, log3[-200:])
-        check("长任务仍正常回执（没被打成执行失败）",
-              task_status(base, "t-b11-g-1") == "待验收", task_status(base, "t-b11-g-1"))
+            proc3.wait(timeout=20)
+        else:
+            check("执行中状态先确认", task_status(base, "t-b11-g-1") == "执行中",
+                  task_status(base, "t-b11-g-1"))
+            proc3.send_signal(signal.SIGTERM)
+            stopped_at = time.time()
+            try:
+                out3, _ = proc3.communicate(timeout=40)
+            except subprocess.TimeoutExpired:
+                proc3.kill()
+                out3, _ = proc3.communicate()
+            grace_used = round(time.time() - stopped_at, 1)
+            log3 = proc3.stdout.read() if False else (out3 or "")
+            check("收到 SIGTERM 后进程正常退出（rc=0）", proc3.returncode == 0, f"rc={proc3.returncode}")
+            check("退出前等到任务收尾（用时 >3s）", grace_used > 3, f"{grace_used}s")
+            check("日志记录了 signal_stop", "signal_stop" in log3, log3[-200:])
+            check("长任务仍正常回执（没被打成执行失败）",
+                  task_status(base, "t-b11-g-1") == "待验收", task_status(base, "t-b11-g-1"))
 
         print("=== D 状态文件 ===")
         check("状态文件已生成", os.path.isfile(status_file), status_file)

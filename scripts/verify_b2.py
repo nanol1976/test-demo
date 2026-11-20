@@ -277,8 +277,20 @@ with TestClient(app) as client:
     for th in threads:
         th.join(timeout=15)
     check("并发 20 条无异常", len(errors) == 0, str(list(errors)[:3]))
-    check("并发索引 20 行", archive_rows("t-b2-conc") == 20, str(archive_rows("t-b2-conc")))
-    check("并发 JSONL 20 行", jsonl_lines("t-b2-conc") == 20, str(jsonl_lines("t-b2-conc")))
+
+    def wait_count(fn, expected, timeout=8.0):
+        """等到计数到位（JSONL/索引的落盘顺序不保证与请求返回同刻，Windows 上更明显）。"""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if fn() == expected:
+                return expected
+            time.sleep(0.2)
+        return fn()
+
+    check("并发索引 20 行", wait_count(lambda: archive_rows("t-b2-conc"), 20) == 20,
+          str(archive_rows("t-b2-conc")))
+    check("并发 JSONL 20 行", wait_count(lambda: jsonl_lines("t-b2-conc"), 20) == 20,
+          str(jsonl_lines("t-b2-conc")))
     bus_conc.stop()
 
     # ------------------------------------------------------------ 收尾校验

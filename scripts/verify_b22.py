@@ -28,6 +28,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 PY = sys.executable
 
+from _proc_drain import drain  # 子进程日志必须读走：Windows 管道写满会把服务堵死
+
 DB = "./data/verify_b22.db"
 ARCHIVE = "./archive/_verify_b22"
 TOKEN = "verify-token"
@@ -137,10 +139,11 @@ def main() -> int:
         cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace",
     )
+    srv_log = drain(server)  # 必须读走 stdout，否则 Windows 上管道写满会把服务堵死
     try:
         check("真起服务", wait_up(base))
         if "真起服务" in FAILS:
-            print((server.stdout.read() if server.stdout else "")[-1500:])
+            print("".join(srv_log[-40:])[-1500:])
             return 1
 
         print("=== 0 造 45 条审计（超过一页）===")

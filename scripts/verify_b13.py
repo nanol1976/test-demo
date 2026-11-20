@@ -28,6 +28,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 PY = sys.executable
 
+from _proc_drain import drain  # 子进程日志必须读走：Windows 管道写满会把服务堵死
+
 DB = "./data/verify_b13.db"
 ARCHIVE = "./archive/_verify_b13"
 TOKEN = "verify-token"
@@ -164,10 +166,11 @@ def main() -> int:
         text=True, encoding="utf-8", errors="replace",
     )
     worker = None
+    srv_log = drain(server)  # 必须读走 stdout，否则 Windows 上管道写满会把服务堵死
     try:
         check("真起服务", wait_up(base))
         if "真起服务" in FAILS:
-            print((server.stdout.read() if server.stdout else "")[-1500:])
+            print("".join(srv_log[-40:])[-1500:])
             return 1
 
         print("=== B POST /api/workers ===")
@@ -229,6 +232,7 @@ def main() -> int:
         worker = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT, text=True,
                                   encoding="utf-8", errors="replace")
+        drain(worker)  # 同上：执行方也会持续打日志
         time.sleep(5)  # 空转窗口：没有任何任务
         code, idle_list = get(base, "/api/workers")
         idle_row = pick_instance(idle_list)
@@ -256,10 +260,14 @@ def main() -> int:
         time.sleep(2)
         code, final = get(base, "/api/workers")
         fin = pick_instance(final)
-        check("收到 SIGTERM 后状态变成 stopping/stopped", fin.get("status") in ("stopping", "stopped"),
-              str(fin.get("status")))
-        check("退出后 online=false", fin.get("online") is False, str(fin.get("online")))
-
+        if os.name == "nt":
+            # Windows 上 terminate() 就是 TerminateProcess：进程没机会上报 stopping，
+            # online=false 也要等 120s 心跳超时，不能在这里断言。明确跳过。
+            print("  [SKIP] 停机上报 2 项：Windows 硬杀不给上报机会（心跳超时另行覆盖）")
+        else:
+            check("收到 SIGTERM 后状态变成 stopping/stopped", fin.get("status") in ("stopping", "stopped"),
+                  str(fin.get("status")))
+            check("退出后 online=false", fin.get("online") is False, str(fin.get("online")))
         print("=== E 接口面与看板 ===")
         code, spec = get(base, "/openapi.json")
         paths = sorted((spec or {})["paths"].keys())
