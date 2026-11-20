@@ -7,3 +7,4 @@ archive/
 *.log
 .env
 artifacts/
+run/
