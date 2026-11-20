@@ -206,7 +206,8 @@ function updatePipelineRow(rec, p) {
   }
   if (rec.last.time !== p.start_time) {
     rec.last.time = p.start_time;
-    setCellText(rec.cells.time, p.start_time);
+    setCellText(rec.cells.time, fmtStamp(p.start_time));
+    rec.cells.time.title = p.start_time || "";
   }
   if (rec.last.demand !== p.original_demand) {
     rec.last.demand = p.original_demand;
@@ -330,7 +331,8 @@ function updateTaskRow(rec, t) {
   if (rec.last.worker !== worker) { rec.last.worker = worker; setCellText(rec.cells.worker, worker); }
   if (rec.last.dispatch !== t.dispatch_time) {
     rec.last.dispatch = t.dispatch_time;
-    setCellText(rec.cells.dispatch, t.dispatch_time);
+    setCellText(rec.cells.dispatch, fmtStamp(t.dispatch_time));
+    rec.cells.dispatch.title = t.dispatch_time || "";
   }
   const retry = `${t.remaining_retry}/${t.max_retry}`;
   if (rec.last.retry !== retry) { rec.last.retry = retry; setCellText(rec.cells.retry, retry); }
@@ -413,6 +415,17 @@ function td(content, cls) {
   const cell = document.createElement("td");
   cell.appendChild(text(content, cls));
   return cell;
+}
+
+/* 时间显示：表里只给「月-日 时:分」，完整值放 tooltip。
+   台账要看的是顺序和间隔，年份与秒只在溯源时才需要。 */
+function fmtStamp(v, withSec) {
+  if (!v) return "—";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return String(v);
+  const p2 = (n) => String(n).padStart(2, "0");
+  const base = `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  return withSec ? `${base}:${p2(d.getSeconds())}` : base;
 }
 
 function workerRegistryState(w) {
@@ -609,7 +622,9 @@ function renderAudit(view) {
   table.appendChild(head);
   shown.forEach((it) => {
     const tr = document.createElement("tr");
-    tr.appendChild(td(new Date(it.created_at).toLocaleString()));
+    const timeCell = td(fmtStamp(it.created_at, true));
+    timeCell.title = it.created_at || "";
+    tr.appendChild(timeCell);
     tr.appendChild(td(it.command.replace("master:", ""), "mono"));
     tr.appendChild(td(`${it.worker_id}/${it.instance_id}`, "mono"));
     const isQuota = it.command === "master:worker-limit";
