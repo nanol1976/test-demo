@@ -69,6 +69,8 @@ class WorkerQuotaAudit(Base):
     desired_limit: Mapped[int] = mapped_column(Integer, nullable=False)
     prev_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     command: Mapped[str] = mapped_column(String(64), nullable=False, default="master:worker-limit")
+    # Batch22：谁下的这条指令。来源是 X-Operator 头，只当"调用方自报的名字"记，不作鉴权依据
+    operator: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False,
                                                  default=func.now())

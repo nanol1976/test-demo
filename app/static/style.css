@@ -266,13 +266,14 @@ textarea {
 #workerTableWrap th, #workerTableWrap td { white-space: nowrap; }
 #workerTableWrap td:last-child { white-space: normal; min-width: 88px; }
 
-/* 审计表：六列各有职责，时间/动作/旧→新不许折行，原因可折 */
+/* 审计表：七列各司其职（时间/操作者/动作/目标/旧→新/是否生效/原因） */
 #auditTableWrap th, #auditTableWrap td { white-space: nowrap; }
-#auditTableWrap td:first-child { width: 156px; }
-#auditTableWrap td:nth-child(2) { width: 92px; }
-#auditTableWrap td:nth-child(4) { width: 72px; text-align: right; }
-#auditTableWrap td:nth-child(5) { width: 82px; }
-#auditTableWrap td:last-child { white-space: normal; min-width: 118px; }
+#auditTableWrap td:nth-child(1) { width: 132px; }
+#auditTableWrap td:nth-child(2) { width: 84px; }
+#auditTableWrap td:nth-child(3) { width: 92px; }
+#auditTableWrap td:nth-child(5) { width: 70px; text-align: right; }
+#auditTableWrap td:nth-child(6) { width: 82px; }
+#auditTableWrap td:last-child { white-space: normal; min-width: 110px; }
 
 /* 表尾注释：贴在表下面，不再塞进表格里 */
 .note {

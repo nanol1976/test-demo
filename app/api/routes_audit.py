@@ -4,12 +4,15 @@ Batch16 把审计落成了表，但只能靠 CLI 读。看板要回答"最近一
 必须给它一条只读路径。这是**唯一一次主动扩接口面**（10 → 11），已在需求里明确同意。
 
 设计：
-  GET /api/audit?limit=20&worker_id=&instance_id=&command=
+  GET /api/audit?limit=20&offset=0&worker_id=&instance_id=&command=
   - `items`：审计流水（倒序），与注册表里当前值比对后给出 `effective`
       * `true`  = 这次下发就是当前生效值，且 Worker 自报的 concurrency 已等于它
       * `false` = 已是当前期望值，但 Worker 还没按它跑（下发没生效）
       * `null`  = 已被更晚的下发覆盖（历史行），或这条本来就没有"生效"概念（暂停/恢复/复位熔断）
   - `current`：注册表快照（`worker_id/instance_id` → `desired_limit` / `concurrency` / `online`）
+
+Batch22：加 `offset` 支持真分页（仍是同一条路径，接口面仍然是 11）；
+每条记录带 `operator`（X-Operator 自报，可能为空，不是身份）。
 
 只读：不写库、不改状态，也不提供删除。审计是 append-only，接口也必须是只读的。
 """
@@ -37,6 +40,7 @@ class AuditItem(BaseModel):
     instance_id: str
     prev_limit: int
     desired_limit: int
+    operator: str = ""
     reason: Optional[str] = None
     created_at: str
     effective: Optional[bool] = None
@@ -65,6 +69,8 @@ class AuditView(BaseModel):
     ),
 )
 def list_audit(limit: int = Query(default=20, ge=1, le=200),
+               offset: int = Query(default=0, ge=0, le=100000,
+                                   description="跳过多少条，用于翻页；items 本身仍是倒序"),
                worker_id: Optional[str] = Query(default=None, max_length=64),
                instance_id: Optional[str] = Query(default=None, max_length=64),
                command: Optional[str] = Query(default=None, max_length=64),
@@ -85,7 +91,7 @@ def list_audit(limit: int = Query(default=20, ge=1, le=200),
         stmt = stmt.where(WorkerQuotaAudit.command == command)
         count_stmt = count_stmt.where(WorkerQuotaAudit.command == command)
 
-    rows = db.execute(stmt.limit(limit)).scalars().all()
+    rows = db.execute(stmt.offset(offset).limit(limit)).scalars().all()
     total = len(db.execute(count_stmt).scalars().all())
 
     reg = db.execute(select(WorkerRegistry)).scalars().all()
@@ -133,6 +139,7 @@ def list_audit(limit: int = Query(default=20, ge=1, le=200),
             instance_id=row.instance_id,
             prev_limit=row.prev_limit,
             desired_limit=row.desired_limit,
+            operator=getattr(row, "operator", "") or "",
             reason=row.reason,
             created_at=ensure_utc(row.created_at).isoformat() if row.created_at else "",
             effective=effective,

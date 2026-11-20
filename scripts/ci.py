@@ -357,6 +357,19 @@ def stage_static():
     check("看板有运维审计面板与生效判定",
           'id="auditPanel"' in html and "loadAudit" in js and "auditEffective" in js)
 
+    # 1.5b9 审计分页 + 操作者（Batch22）：翻页不许退回"硬顶 20 条"，操作者不许变成鉴权
+    check("审计接口支持 offset（分页走服务端，不靠前端拉全量）",
+          "offset: int = Query" in atxt and ".offset(offset)" in atxt)
+    check("审计表中的 operator 只 ADD COLUMN 过（v009）",
+          os.path.exists(os.path.join(ROOT, "migrations", "versions", "v009_audit_operator.py")))
+    check("下发接口从 X-Operator 取操作者",
+          'alias="X-Operator"' in cmds_py and "unquote(operator" in cmds_py, "操作者没接进来")
+    check("看板有审计翻页控件", all(k in html for k in ("auditPrev", "auditNext")))
+    check("看板有操作者输入，且随每个请求带上",
+          'id="operatorInput"' in html and 'headers["X-Operator"]' in js)
+    check("配额下发结果写进页面（不是塞 data 属性）",
+          "workerCmdResult" in js and "setAttribute(\"data-last-cmd\"" not in js)
+
     # 1.5c 越权与重放红线（Batch10）：权限校验不能被"顺手删掉"
     dispatch_py = read(os.path.join(ROOT, "app", "services", "dispatch.py"))
     owner_calls = re.findall(r"_require_owner\(task, envelope, \"task_(\w+)\"", dispatch_py)

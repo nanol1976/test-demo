@@ -35,6 +35,9 @@ const state = {
   workerFilter: "", workerOnlineOnly: false, workerInstance: "",
   // Batch18：运维审计筛选
   auditKeyword: "",
+  // Batch22：审计分页（服务端 offset 翻页）+ 操作者
+  auditPage: 1, auditPages: 1, auditTotal: 0,
+  operator: "",
 };
 
 const API_TIMEOUT_MS = 30000;
@@ -43,6 +46,8 @@ const WORKER_ONLINE_MS = 120000;
 const WORKER_VIEW_SIZE = 100;
 const RESULT_MAX_CHARS = 20000;
 const AUTO_KEY = "mwp_auto_refresh_ms";
+const AUDIT_PAGE = 20;            // 审计每页条数（Batch22）
+const OPERATOR_KEY = "mwp_operator";
 
 function el(id) { return document.getElementById(id); }
 
@@ -69,6 +74,9 @@ function text(value, cls) {
 async function api(path, options = {}) {
   const headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
   if (state.token) headers["X-API-Token"] = state.token;
+  // Batch22：把操作者名字带上去，平台只记不自证（没有身份体系）
+  // 头只能装 latin-1，中文名字先 percent-encode（服务端 unquote 还原）
+  if (state.operator) headers["X-Operator"] = encodeURIComponent(state.operator);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
   try {
@@ -470,17 +478,21 @@ async function setWorkerLimit(w, raw) {
     limit: limit === "" ? 0 : Number(limit),
     reason: "看板手动下发",
   };
-  const panel = el("workerTableWrap");
   if (!Number.isFinite(body.limit) || body.limit < 0 || body.limit > 64) {
-    if (panel) panel.setAttribute("data-last-cmd", "期望并发必须是 0~64 的整数");
+    showResult("workerCmdResult", false, "期望并发必须是 0~64 的整数");
     return;
   }
   const r = await api(ROUTES.commands, { method: "POST", body: JSON.stringify(body) });
-  const msg = r.ok
-    ? `已下发 ${body.worker_id}/${body.instance_id} 期望并发=${r.body.desired_limit}（0=撤销），Worker 下次上报生效`
-    : `下发失败：${r.status} ${JSON.stringify(r.body)}`;
-  if (panel) panel.setAttribute("data-last-cmd", msg);
+  if (r.ok) {
+    const d = r.body.desired_limit;
+    showResult("workerCmdResult", true, d === 0
+      ? `已撤销 ${body.worker_id}/${body.instance_id} 的配额，Worker 下次上报回到自己的配置`
+      : `已下发 ${body.worker_id}/${body.instance_id} 期望并发=${d}；Worker 下次上报才生效，这里会显示"未生效"直到它按新值跑`);
+  } else {
+    showResult("workerCmdResult", false, `下发失败：${r.status} ${JSON.stringify(r.body)}`);
+  }
   loadWorkers();
+  loadAudit({ reset: true });
 }
 
 function renderRegistry(workers) {
@@ -520,7 +532,17 @@ function renderRegistry(workers) {
     tr.appendChild(stCell);
     tr.appendChild(td(`${w.in_flight}`, "num"));
     tr.appendChild(td(`${w.limit}/${w.concurrency}`, "num"));
-    tr.appendChild(td(w.desired_limit ? String(w.desired_limit) : "—", w.desired_limit ? "num" : "muted"));
+    // Batch22：期望值下发后 Worker 还没按它跑，就地标出来，不用等审计翻页
+    const wantCell = td(w.desired_limit ? String(w.desired_limit) : "—", w.desired_limit ? "num" : "muted");
+    if (w.desired_limit && w.concurrency !== w.desired_limit) {
+      const warn = document.createElement("span");
+      warn.className = "tag warn";
+      warn.textContent = "未生效";
+      warn.title = `期望 ${w.desired_limit}，Worker 自报 ${w.concurrency}`;
+      warn.style.marginLeft = "6px";
+      wantCell.appendChild(warn);
+    }
+    tr.appendChild(wantCell);
     const quotaCell = document.createElement("td");
     const input = document.createElement("input");
     input.type = "number";
@@ -533,6 +555,9 @@ function renderRegistry(workers) {
     btn.textContent = "下发";
     btn.className = "ghost";
     btn.addEventListener("click", () => setWorkerLimit(w, input.value));
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); setWorkerLimit(w, input.value); }
+    });
     quotaCell.appendChild(input);
     quotaCell.appendChild(btn);
     tr.appendChild(quotaCell);
@@ -590,7 +615,7 @@ function auditEffective(v) {
   return { label: "—", cls: "idle" };
 }
 
-function renderAudit(view) {
+function renderAudit(view, opts = {}) {
   const wrap = el("auditTableWrap");
   if (!wrap) return;
   lastAudit = view;
@@ -603,7 +628,8 @@ function renderAudit(view) {
   });
   const meta = (view && view.meta) || { total: 0 };
   el("auditCount").textContent = items.length
-    ? `（显示 ${shown.length} / 最近 ${items.length} 条，共 ${meta.total} 条）` : "";
+    ? `（本页 ${shown.length} 条，共 ${meta.total} 条）` : "";
+  renderAuditPager(view, !!opts.filtered);
   if (!items.length) {
     wrap.innerHTML = '<div class="empty">还没有运维动作记录</div>';
     return;
@@ -614,7 +640,7 @@ function renderAudit(view) {
   }
   const table = document.createElement("table");
   const head = document.createElement("tr");
-  ["时间", "动作", "目标", "旧→新", "是否生效", "原因"].forEach((h) => {
+  ["时间", "操作者", "动作", "目标", "旧→新", "是否生效", "原因"].forEach((h) => {
     const th = document.createElement("th");
     th.textContent = h;
     head.appendChild(th);
@@ -625,6 +651,7 @@ function renderAudit(view) {
     const timeCell = td(fmtStamp(it.created_at, true));
     timeCell.title = it.created_at || "";
     tr.appendChild(timeCell);
+    tr.appendChild(td(it.operator || "—", it.operator ? "mono" : "muted"));
     tr.appendChild(td(it.command.replace("master:", ""), "mono"));
     tr.appendChild(td(`${it.worker_id}/${it.instance_id}`, "mono"));
     const isQuota = it.command === "master:worker-limit";
@@ -653,18 +680,42 @@ function renderAudit(view) {
   }
 }
 
-async function loadAudit() {
+async function loadAudit(opts = {}) {
   const wrap = el("auditTableWrap");
+  if (!wrap) return;
+  if (opts.reset) state.auditPage = 1;
+  const kw = state.auditKeyword.trim();
+  // 有关键字时退化成"扫最近 200 条再当页过滤"——服务端只支持精确过滤，没法做子串
+  const limit = kw ? 200 : AUDIT_PAGE;
+  const offset = kw ? 0 : (state.auditPage - 1) * AUDIT_PAGE;
   try {
-    const r = await api(`${ROUTES.audit}?limit=20`);
+    const r = await api(`${ROUTES.audit}?limit=${limit}&offset=${offset}`);
     if (!r.ok) {
-      if (wrap) wrap.innerHTML = `<div class="empty">审计读取失败：${r.status}</div>`;
+      wrap.innerHTML = `<div class="empty">审计读取失败：${r.status} ${JSON.stringify(r.body)}</div>`;
       return;
     }
-    renderAudit(r.body);
+    renderAudit(r.body, { filtered: !!kw });
   } catch (e) {
-    if (wrap) wrap.innerHTML = `<div class="empty">审计请求异常：${e}</div>`;
+    wrap.innerHTML = `<div class="empty">审计请求异常：${e}</div>`;
   }
+}
+
+function renderAuditPager(view, filtered) {
+  const info = el("auditPageInfo");
+  const total = el("auditTotal");
+  const prev = el("auditPrev");
+  const next = el("auditNext");
+  if (!info || !prev || !next) return;
+  const meta = (view && view.meta) || { total: 0 };
+  state.auditTotal = meta.total || 0;
+  state.auditPages = filtered ? 1 : Math.max(1, Math.ceil(state.auditTotal / AUDIT_PAGE));
+  info.textContent = filtered ? `搜索：最近 ${meta.shown} 条里命中 ${(view.items || []).length} 条`
+                             : `第 ${state.auditPage} / ${state.auditPages} 页`;
+  if (total) {
+    total.textContent = `共 ${state.auditTotal} 条` + (filtered ? "（搜索时只看最近 200 条）" : "");
+  }
+  prev.disabled = filtered || state.auditPage <= 1;
+  next.disabled = filtered || state.auditPage >= state.auditPages;
 }
 
 async function loadDetail(traceId, opts = {}) {
@@ -866,8 +917,26 @@ function bind() {
   el("workerOnlineOnly").addEventListener("change", (e) => { state.workerOnlineOnly = e.target.checked; renderRegistry(lastWorkers); });
   el("workerInstanceSearch").addEventListener("input", (e) => { state.workerInstance = e.target.value; renderRegistry(lastWorkers); });
 
-  el("auditSearch").addEventListener("input", (e) => { state.auditKeyword = e.target.value; renderAudit(lastAudit); });
-  el("reloadAudit").addEventListener("click", loadAudit);
+  // Batch22：审计筛选与分页。筛选走"最近 200 条内当页过滤"，翻页走服务端 offset
+  let auditTimer = null;
+  el("auditSearch").addEventListener("input", (e) => {
+    clearTimeout(auditTimer);
+    const value = e.target.value;
+    auditTimer = setTimeout(() => { state.auditKeyword = value; loadAudit({ reset: true }); }, 400);
+  });
+  el("reloadAudit").addEventListener("click", () => loadAudit({ reset: true }));
+  el("auditPrev").addEventListener("click", () => {
+    if (state.auditPage > 1) { state.auditPage -= 1; loadAudit(); }
+  });
+  el("auditNext").addEventListener("click", () => {
+    if (state.auditPage < state.auditPages) { state.auditPage += 1; loadAudit(); }
+  });
+
+  // Batch22：操作者名字（只记不自证），存本地，随每个请求带 X-Operator
+  el("operatorInput").addEventListener("input", (e) => {
+    state.operator = e.target.value.trim();
+    localStorage.setItem(OPERATOR_KEY, state.operator);
+  });
 
   el("pipeStatus").addEventListener("change", (e) => { state.status = e.target.value; state.page = 1; loadPipelines(); });
   el("pipeSort").addEventListener("change", (e) => { state.sort = e.target.value; state.page = 1; loadPipelines(); });
@@ -904,6 +973,8 @@ function bind() {
 
 state.token = localStorage.getItem("mwp_token") || "";
 el("tokenInput").value = state.token;
+state.operator = localStorage.getItem(OPERATOR_KEY) || "";
+el("operatorInput").value = state.operator;
 bind();
 checkHealth();
 loadWorkers();

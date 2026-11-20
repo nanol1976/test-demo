@@ -16,6 +16,10 @@
     <input id="tokenInput" type="password" placeholder="未配置可留空" autocomplete="off">
     <button class="ghost" id="saveToken">记住</button>
   </div>
+  <div class="token-box">
+    <label class="muted" for="operatorInput">操作者</label>
+    <input id="operatorInput" placeholder="填你的名字，会记进审计" autocomplete="off">
+  </div>
 </header>
 
 <main>
@@ -28,6 +32,7 @@
         <label class="muted"><input type="checkbox" id="workerOnlineOnly"> 仅在线</label>
         <input id="workerInstanceSearch" placeholder="按实例名筛选（如主机名）" style="flex:1;min-width:140px">
       </div>
+      <div id="workerCmdResult"></div>
       <div id="workerTableWrap"><div class="empty">加载中…</div></div>
     </div>
 
@@ -39,6 +44,12 @@
         <button class="ghost" id="reloadAudit">刷新</button>
       </div>
       <div id="auditTableWrap"><div class="empty">加载中…</div></div>
+      <div class="pager">
+        <button class="ghost" id="auditPrev">上一页</button>
+        <span class="muted" id="auditPageInfo"></span>
+        <button class="ghost" id="auditNext">下一页</button>
+        <span class="muted" id="auditTotal"></span>
+      </div>
     </div>
 
     <div class="panel">
