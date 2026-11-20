@@ -19,6 +19,7 @@ E 文档写了 data/ 留什么、删什么
 F 仓库里没有残留库文件被跟踪（git 层面不该出现 *.db）
 """
 import os
+import shutil
 import subprocess
 import sys
 
@@ -73,8 +74,17 @@ def main() -> int:
     check("文档说明空库/测试库要清", "mw_platform" in doc or "测试库" in doc)
 
     print("=== F 版本库里没有库文件 ===")
+    # git 不一定在 PATH 里（这台 Windows 重启后 PATH 就丢过 Git），先自己找一遍
+    git = shutil.which("git")
+    if not git:
+        for cand in ("C:/Program Files/Git/cmd/git.exe", "C:/Program Files/Git/bin/git.exe"):
+            if os.path.exists(cand):
+                git = cand
+                break
     try:
-        out = subprocess.run(["git", "ls-files", "data"], cwd=ROOT,
+        if not git:
+            raise FileNotFoundError("找不到 git")
+        out = subprocess.run([git, "ls-files", "data"], cwd=ROOT,
                              capture_output=True, text=True, encoding="utf-8").stdout.strip()
     except Exception as exc:  # pragma: no cover
         out = f"<git 不可用: {exc}>"
