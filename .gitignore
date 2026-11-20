@@ -8,3 +8,4 @@ archive/
 .env
 artifacts/
 run/
+data/*.db.bak*
