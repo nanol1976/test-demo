@@ -505,9 +505,9 @@ function renderRegistry(workers) {
     span.textContent = st.label;
     stCell.appendChild(span);
     tr.appendChild(stCell);
-    tr.appendChild(td(`${w.in_flight}`));
-    tr.appendChild(td(`${w.limit}/${w.concurrency}`));
-    tr.appendChild(td(w.desired_limit ? String(w.desired_limit) : "—", w.desired_limit ? "" : "muted"));
+    tr.appendChild(td(`${w.in_flight}`, "num"));
+    tr.appendChild(td(`${w.limit}/${w.concurrency}`, "num"));
+    tr.appendChild(td(w.desired_limit ? String(w.desired_limit) : "—", w.desired_limit ? "num" : "muted"));
     const quotaCell = document.createElement("td");
     const input = document.createElement("input");
     input.type = "number";
@@ -523,7 +523,7 @@ function renderRegistry(workers) {
     quotaCell.appendChild(input);
     quotaCell.appendChild(btn);
     tr.appendChild(quotaCell);
-    tr.appendChild(td(String(w.handled)));
+    tr.appendChild(td(String(w.handled), "num"));
     tr.appendChild(td(new Date(w.last_seen).toLocaleTimeString()));
     tr.appendChild(td(w.note || "—", "muted"));
     table.appendChild(tr);
@@ -613,11 +613,11 @@ function renderAudit(view) {
     tr.appendChild(td(it.command.replace("master:", ""), "mono"));
     tr.appendChild(td(`${it.worker_id}/${it.instance_id}`, "mono"));
     const isQuota = it.command === "master:worker-limit";
-    tr.appendChild(td(isQuota ? `${it.prev_limit}→${it.desired_limit}` : "—", isQuota ? "" : "muted"));
+    tr.appendChild(td(isQuota ? `${it.prev_limit}→${it.desired_limit}` : "—", isQuota ? "num" : "muted"));
     const eff = auditEffective(isQuota ? it.effective : null);
     const cell = document.createElement("td");
     const span = document.createElement("span");
-    span.className = "tag " + eff.cls;
+    span.className = "tag " + eff.cls + (eff.cls === "ok" ? " is-stamp" : "");
     span.textContent = eff.label;
     cell.appendChild(span);
     tr.appendChild(cell);
@@ -626,16 +626,16 @@ function renderAudit(view) {
   });
   const cur = (view && view.current) || {};
   const keys = Object.keys(cur);
+  wrap.innerHTML = "";
+  wrap.appendChild(table);
   if (keys.length) {
     const note = document.createElement("div");
-    note.className = "empty";
+    note.className = "note";
     note.textContent = "注册表当前：" + keys.map((k) =>
       `${k} 期望=${cur[k].desired_limit || "—"} 并发=${cur[k].concurrency} ${cur[k].online ? "在线" : "静默"}`
     ).join("；");
-    table.appendChild(note);
+    wrap.appendChild(note);
   }
-  wrap.innerHTML = "";
-  wrap.appendChild(table);
 }
 
 async function loadAudit() {

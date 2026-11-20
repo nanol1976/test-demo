@@ -1,280 +1,282 @@
-/* Master-Worker 台账看板 —— 视觉层
-   原则：零依赖、零构建、单文件；只负责观感，不改变任何交互与 id。
-   Batch19：整体重做色彩 / 间距 / 表格，支持浅色与深色（跟随系统）。 */
+/* Master-Worker 调度台账 —— 视觉层（Batch20）
+   依据 Anthropic frontend-design skill 重做：这不是一张仪表盘，是一本台账。
+   零依赖、零构建；只改观感，不动任何 id 与交互。
+   刻意不用：卡片投影、统一大圆角、渐变装饰、每节小标签、通篇等宽小字。 */
 
-/* ---------- 设计变量 ---------- */
 :root {
-  --bg:          #f3f4f7;
-  --bg-accent:   #eceef3;
-  --surface:     #ffffff;
-  --surface-2:   #f8f9fc;
-  --surface-3:   #f1f3f8;
-  --line:        #e2e5ec;
-  --line-strong: #d3d7e2;
-  --text:        #14161c;
-  --text-2:      #3b4250;
-  --muted:       #6b7382;
-  --accent:      #3559d6;
-  --accent-soft: #e8edfc;
-  --ok:          #137a4b;
-  --ok-soft:     #e3f6ec;
-  --warn:        #9a5b06;
-  --warn-soft:   #fbeed8;
-  --bad:         #b02a1c;
-  --bad-soft:    #fbe5e1;
-  --idle:        #5d6675;
-  --idle-soft:   #eceff4;
-  --shadow:      0 1px 2px rgba(16, 22, 40, .04), 0 4px 14px rgba(16, 22, 40, .05);
-  --radius:      12px;
-  --radius-sm:   8px;
+  /* 纸、栏、墨：三档中性，偏冷绿灰，不是办公室打印纸的暖米色 */
+  --sheet:   #f1f2ec;
+  --pan:     #e7e8e0;
+  --pan-2:   #eceee7;
+  --ink:     #171a15;
+  --ink-2:   #464a40;
+  --muted:   #6e7265;
+
+  --rule:    #b9bdb0;   /* 细线 */
+  --rule-2:  #cfd3c6;   /* 更轻 */
+  --stamp:   #1c5a45;   /* 唯一的强调色：凭证绿 */
+  --stamp-ink:#123a2d;
+  --warn:    #8a5a12;
+  --bad:     #8b2e22;
+
   --mono: Consolas, "Cascadia Mono", "SF Mono", Menlo, "Courier New", monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg:          #0e1014;
-    --bg-accent:   #14171e;
-    --surface:     #171a21;
-    --surface-2:   #1c2029;
-    --surface-3:   #222734;
-    --line:        #262c38;
-    --line-strong: #333a49;
-    --text:        #e7e9ef;
-    --text-2:      #c3c8d4;
-    --muted:       #8a93a6;
-    --accent:      #7e9bff;
-    --accent-soft: #202a45;
-    --ok:          #57cd93;
-    --ok-soft:     #17301f;
-    --warn:        #e6b465;
-    --warn-soft:   #322613;
-    --bad:         #f08d80;
-    --bad-soft:    #3a1e1b;
-    --idle:        #9aa3b4;
-    --idle-soft:   #232833;
-    --shadow:      0 1px 2px rgba(0, 0, 0, .4), 0 6px 18px rgba(0, 0, 0, .35);
+    --sheet:   #12140f;
+    --pan:     #1b1e17;
+    --pan-2:   #171a13;
+    --ink:     #e8eae1;
+    --ink-2:   #b9bdb0;
+    --muted:   #8b8f81;
+    --rule:    #3a3f33;
+    --rule-2:  #2a2e25;
+    --stamp:   #6fbf9b;
+    --stamp-ink:#0e241b;
+    --warn:    #d0a05a;
+    --bad:     #d48376;
   }
 }
 
-/* ---------- 基础 ---------- */
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
+
 body {
   margin: 0;
-  background: radial-gradient(1200px 320px at 18% -10%, var(--bg-accent), transparent 70%), var(--bg);
-  color: var(--text);
-  font: 14px/1.65 "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
-  font-feature-settings: "tnum" 1;
+  background: var(--sheet);
+  color: var(--ink);
+  font: 14px/1.6 "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
 }
-::selection { background: var(--accent-soft); color: var(--text); }
+::selection { background: var(--stamp); color: var(--sheet); }
 
-/* ---------- 顶栏 ---------- */
+/* ---------- 单据抬头 ---------- */
 header {
-  display: flex; align-items: center; gap: 14px;
-  padding: 14px 24px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
+  display: flex; align-items: flex-end; gap: 16px;
+  padding: 22px 32px 12px;
+  max-width: 1320px; margin: 0 auto;
+  border-bottom: 3px solid var(--ink);     /* 账簿里最重的那条线 */
   position: sticky; top: 0; z-index: 20;
+  background: var(--sheet);
 }
 header h1 {
-  font-size: 15px; margin: 0; font-weight: 650; letter-spacing: .01em;
-  display: flex; align-items: center; gap: 10px;
+  font-size: 26px; margin: 0; font-weight: 700; letter-spacing: .02em;
+  line-height: 1.1;
 }
-header h1::before {
-  content: "MW";
-  display: grid; place-items: center;
-  width: 26px; height: 26px; border-radius: 8px;
-  background: var(--accent);
-  color: #fff; font: 700 11px/1 var(--mono); letter-spacing: .06em;
+header h1::after {
+  content: "谁在跑，配多少，生效了没有";
+  display: block; margin-top: 6px;
+  font-size: 11.5px; font-weight: 400; letter-spacing: .08em;
+  color: var(--muted);
 }
 header .spacer { flex: 1; }
 
-/* 健康徽标 */
+/* 站起来的状态：一枚方章，不是圆点药丸 */
 #healthBadge {
-  font-size: 12px; padding: 3px 10px 3px 9px; border-radius: 999px;
-  background: var(--surface-3); border: 1px solid var(--line);
-  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; padding: 3px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  color: var(--ink-2);
+  background: transparent;
 }
-#healthBadge::before {
-  content: ""; width: 6px; height: 6px; border-radius: 50%;
-  background: var(--muted);
-}
+#healthBadge::before { content: ""; display: inline-block; width: 5px; height: 5px; margin-right: 6px; vertical-align: 1px; background: var(--stamp); }
 
-.token-box { display: flex; align-items: center; gap: 8px; }
-.token-box label { font-size: 12px; letter-spacing: .02em; }
-.token-box input { width: 190px; }
+.token-box { display: flex; align-items: center; gap: 8px; padding-bottom: 2px; }
+.token-box label { font-size: 12px; color: var(--muted); }
+.token-box input { width: 176px; }
 
-/* ---------- 控件 ---------- */
+/* ---------- 控件：小圆角、无阴影、线细但清楚 ---------- */
 input, select, textarea, button {
-  font: inherit; color: var(--text);
-  border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
-  padding: 7px 11px; background: var(--surface);
-  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+  font: inherit; color: var(--ink);
+  background: var(--pan-2);
+  border: 1px solid var(--rule-2);
+  border-radius: 2px;
+  padding: 6px 10px;
+  transition: border-color .12s ease, background .12s ease;
 }
-input:hover, select:hover, textarea:hover { border-color: var(--accent); }
+input:hover, select:hover, textarea:hover, button:hover { border-color: var(--rule); }
 input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible {
-  outline: none; border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  outline: 2px solid var(--stamp); outline-offset: 1px; border-color: var(--stamp);
 }
-select { padding-right: 26px; cursor: pointer; }
-button { cursor: pointer; font-weight: 550; letter-spacing: .01em; }
-button:hover { border-color: var(--accent); background: var(--surface-2); }
+select { cursor: pointer; padding-right: 8px; }
+button { cursor: pointer; }
+button:hover { background: var(--pan); }
 button.primary {
-  background: var(--accent); border-color: var(--accent); color: #fff;
+  background: var(--stamp); border-color: var(--stamp); color: var(--sheet);
+  font-weight: 600;
 }
-button.primary:hover { filter: brightness(.94); }
-button.ghost { background: transparent; border-color: var(--line-strong); color: var(--text-2); }
-button.ghost:hover { background: var(--surface-3); }
+button.primary:hover { background: var(--stamp-ink); border-color: var(--stamp-ink); }
+button.ghost { background: transparent; }
 button:disabled { opacity: .45; cursor: not-allowed; }
 
-/* ---------- 布局 ---------- */
+/* ---------- 版式：一张纸，左主栏 + 右附页 ---------- */
 main {
-  display: grid; grid-template-columns: minmax(0, 1fr) 392px;
-  gap: 20px; padding: 20px 24px 40px;
+  max-width: 1320px; margin: 0 auto;
+  display: grid; grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 0 36px;
+  padding: 0 32px 48px;
   align-items: start;
 }
-@media (max-width: 1120px) {
+@media (max-width: 1080px) {
   main { grid-template-columns: minmax(0, 1fr); }
-  header { flex-wrap: wrap; }
+  header { flex-wrap: wrap; align-items: flex-start; }
 }
 
-/* ---------- 卡片 ---------- */
+/* 一节 = 一条粗线 + 标题行 + 内容；没有背景、没有边框、没有阴影 */
 .panel {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 18px 20px 20px;
-  margin-bottom: 18px;
-  box-shadow: var(--shadow);
+  border-top: 2px solid var(--ink);
+  padding: 12px 0 26px;
+  margin: 0;
 }
+.panel + .panel { margin-top: 6px; }
+.panel[hidden] { display: none; }
+
 .panel h2 {
-  font-size: 14px; margin: 0 0 12px; font-weight: 650;
-  letter-spacing: .01em;
-  display: flex; align-items: center; gap: 8px;
-}
-.panel h2::before {
-  content: "";
-  width: 3px; height: 14px; border-radius: 2px;
-  background: var(--accent); opacity: .9;
+  display: flex; align-items: baseline; gap: 10px;
+  font-size: 15px; margin: 0 0 12px; font-weight: 700; letter-spacing: .02em;
 }
 .panel h2 .count {
-  color: var(--muted); font-weight: 450; font-size: 12px;
+  margin-left: auto;
+  font-size: 11.5px; font-weight: 400; color: var(--muted);
   font-variant-numeric: tabular-nums;
-  background: var(--surface-3); padding: 1px 8px; border-radius: 999px;
 }
-.panel[hidden] { display: none; }
 
 .toolbar {
   display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-  margin-bottom: 14px;
+  padding: 8px 0 12px;
+  border-bottom: 1px solid var(--rule-2);
+  margin-bottom: 0;
 }
 .toolbar > input[style*="flex:1"] { flex: 1 1 160px; min-width: 0 !important; }
 
-.hint {
-  font-size: 12.5px; line-height: 1.75; color: var(--muted);
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--accent);
-  border-radius: 4px var(--radius-sm) var(--radius-sm) 4px;
-  padding: 10px 14px; margin: 0 0 14px;
-  max-width: 100%;
-}
-.hint b { color: var(--text-2); font-weight: 600; }
-
-/* 说明区可折叠：默认收起，需要时点开，页面上不再有一大段灰字 */
-details.hint { padding: 9px 14px 9px 13px; }
+/* 说明：折起来压在标题下，不占视觉 */
+details.hint { padding: 0 0 10px; border-bottom: 1px solid var(--rule-2); }
 details.hint > summary {
   cursor: pointer; list-style: none;
-  display: flex; align-items: center; gap: 6px;
-  font-size: 12.5px; font-weight: 600; color: var(--text-2);
-  letter-spacing: .01em;
+  font-size: 12px; color: var(--muted);
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 0;
 }
 details.hint > summary::-webkit-details-marker { display: none; }
-details.hint > summary::before { content: "▸"; color: var(--accent); font-size: 11px; line-height: 1; }
-details.hint[open] > summary::before { content: "▾"; }
-details.hint > p { margin: 9px 0 0; font-size: 12.5px; line-height: 1.75; color: var(--muted); }
-
-/* ---------- 表格 ---------- */
-[id$="TableWrap"] {
-  max-height: 52vh; overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
+details.hint > summary::before { content: "+"; color: var(--stamp); font-weight: 700; }
+details.hint[open] > summary::before { content: "−"; }
+details.hint > p {
+  margin: 8px 0 2px; max-width: 74ch;
+  font-size: 12.5px; line-height: 1.8; color: var(--muted);
 }
-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+.hint { font-size: 12.5px; color: var(--muted); margin: 0 0 10px; max-width: 74ch; }
+
+/* ---------- 表格：栏底 + 双线，账簿的样子 ---------- */
+[id$="TableWrap"] { max-height: 50vh; overflow: auto; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
 thead th {
   position: sticky; top: 0; z-index: 2;
-  background: var(--surface-3);
-  color: var(--muted);
-  font-size: 11.5px; font-weight: 600; letter-spacing: .06em;
-  padding: 9px 12px; text-align: left; white-space: nowrap;
-  border-bottom: 1px solid var(--line-strong);
+  background: var(--pan);
+  color: var(--ink);
+  font-size: 12px; font-weight: 700; letter-spacing: .02em;
+  text-align: left; white-space: nowrap;
+  padding: 7px 10px;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);   /* 表头上下各一条 → 双线 */
 }
 tbody td {
-  padding: 10px 12px; vertical-align: top;
-  border-bottom: 1px solid var(--line);
-  color: var(--text-2);
+  padding: 9px 10px;
+  border-bottom: 1px dotted var(--rule-2);
+  color: var(--ink-2);
+  vertical-align: top;
 }
-tbody tr:last-child td { border-bottom: 0; }
-tbody tr.clickable { cursor: pointer; transition: background .12s ease; }
-tbody tr.clickable:hover td { background: var(--surface-2); }
+tbody tr:last-child td { border-bottom: 1px solid var(--rule); }
+tbody tr.clickable { cursor: pointer; }
+tbody tr.clickable:hover td { background: var(--pan-2); }
 tbody tr.selected td {
-  background: var(--accent-soft);
-  box-shadow: inset 3px 0 0 var(--accent);
+  background: var(--pan);
+  box-shadow: inset 2px 0 0 var(--stamp);
 }
-td .mono { font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+/* 数值列右对齐：并发、配额、完成数这类要能竖着比 */
+td.num, td.num .mono { text-align: right; }
+td .mono, .mono { font-family: var(--mono); font-size: 12px; letter-spacing: -.01em; }
 
-/* ---------- 状态标签 ---------- */
+/* ---------- 状态：方章，不是药丸 ---------- */
 .tag {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 2px 9px 2px 8px; border-radius: 999px;
-  font-size: 11.5px; font-weight: 600; letter-spacing: .01em;
+  display: inline-block;
+  padding: 1px 7px 2px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  font-size: 11.5px; font-weight: 600; letter-spacing: .02em;
   white-space: nowrap;
-  background: var(--idle-soft); color: var(--idle);
+  color: var(--muted);
 }
-.tag::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .9; }
-.tag.ok   { background: var(--ok-soft);   color: var(--ok); }
-.tag.bad  { background: var(--bad-soft);  color: var(--bad); }
-.tag.warn { background: var(--warn-soft); color: var(--warn); }
-.tag.info { background: var(--accent-soft); color: var(--accent); }
-.tag.idle { background: var(--idle-soft); color: var(--idle); }
+.tag.ok   { color: var(--stamp); }
+.tag.warn { color: var(--warn); }
+.tag.bad  { color: var(--bad); }
+.tag.info { color: var(--ink-2); }
+/* 无判定（—）不画框：空框会被误读成“失败” */
+.tag.idle { color: var(--rule); border-color: transparent; }
 
-/* ---------- 其它 ---------- */
-.mono { font-family: var(--mono); font-size: 12px; }
+/* 唯一用力处：「已生效」是一枚盖上去的实心章 */
+.tag.ok.is-stamp {
+  background: var(--stamp); border-color: var(--stamp);
+  color: var(--sheet); font-weight: 700; letter-spacing: .04em;
+}
+
+/* ---------- 其余 ---------- */
 .muted { color: var(--muted); }
+/* 空状态与表尾注释共用：都不加图标，只留一条线 */
 .empty {
-  color: var(--muted); padding: 22px 4px; text-align: center; font-size: 13px;
+  color: var(--muted); font-size: 12.5px;
+  padding: 12px 2px; border-bottom: 1px solid var(--rule-2);
 }
 .pager {
-  display: flex; gap: 10px; align-items: center; justify-content: flex-end;
-  margin-top: 12px; font-size: 12px;
+  display: flex; gap: 12px; align-items: center; justify-content: flex-end;
+  padding-top: 10px; font-size: 12px;
 }
 .kv {
-  display: grid; grid-template-columns: 92px minmax(0, 1fr);
-  gap: 8px 14px; font-size: 13px;
-  background: var(--surface-2); border: 1px solid var(--line);
-  border-radius: var(--radius-sm); padding: 14px 16px;
+  display: grid; grid-template-columns: 88px minmax(0, 1fr);
+  gap: 0; font-size: 13px;
+  border-top: 1px solid var(--rule-2);
 }
-.kv dt { color: var(--muted); font-size: 12.5px; }
-.kv dd { margin: 0; word-break: break-all; color: var(--text-2); }
+.kv dt {
+  color: var(--muted); font-size: 12px;
+  padding: 6px 0; border-bottom: 1px dotted var(--rule-2);
+}
+.kv dd {
+  margin: 0; padding: 6px 0; word-break: break-all; color: var(--ink-2);
+  border-bottom: 1px dotted var(--rule-2);
+}
 
 textarea {
-  width: 100%; min-height: 210px;
+  width: 100%; min-height: 190px; margin-top: 10px;
   font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
-  background: var(--surface-2); resize: vertical;
+  background: var(--pan-2); resize: vertical;
 }
 
 .result {
-  margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-sm);
-  font-size: 12px; line-height: 1.7;
+  margin-top: 10px; padding: 8px 10px; font-size: 12px; line-height: 1.7;
   white-space: pre-wrap; word-break: break-word;
-  border: 1px solid var(--line); background: var(--surface-2); color: var(--text-2);
+  border-left: 3px solid var(--rule);
+  background: var(--pan-2); color: var(--ink-2);
 }
-.result.ok  { background: var(--ok-soft);  border-color: var(--ok);  color: var(--ok); }
-.result.err { background: var(--bad-soft); border-color: var(--bad); color: var(--bad); }
+.result.ok  { border-left-color: var(--stamp); color: var(--stamp); }
+.result.err { border-left-color: var(--bad);   color: var(--bad); }
 
-/* 执行方表格：列多、内容短，禁止挤压；配额单元格给足宽度 */
-#workerTableWrap th,
-#workerTableWrap td { white-space: nowrap; }
-#workerTableWrap td:last-child { white-space: normal; min-width: 90px; }
+/* 执行方表列多，禁止挤压；配额输入框给足宽度 */
+#workerTableWrap th, #workerTableWrap td { white-space: nowrap; }
+#workerTableWrap td:last-child { white-space: normal; min-width: 88px; }
+
+/* 审计表：六列各有职责，时间/动作/旧→新不许折行，原因可折 */
+#auditTableWrap th, #auditTableWrap td { white-space: nowrap; }
+#auditTableWrap td:first-child { width: 156px; }
+#auditTableWrap td:nth-child(2) { width: 92px; }
+#auditTableWrap td:nth-child(4) { width: 72px; text-align: right; }
+#auditTableWrap td:nth-child(5) { width: 82px; }
+#auditTableWrap td:last-child { white-space: normal; min-width: 118px; }
+
+/* 表尾注释：贴在表下面，不再塞进表格里 */
+.note {
+  font-size: 12px; color: var(--muted);
+  padding: 8px 2px 0; border-top: 1px solid var(--rule-2);
+  margin-top: 2px; max-width: 74ch;
+}
