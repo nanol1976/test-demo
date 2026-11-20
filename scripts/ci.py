@@ -509,6 +509,13 @@ def stage_static():
     check("Batch28 只读口令进 .env 时与全权分开（不共用一个变量名）",
           "API_TOKEN_READONLY" in inst2 or "API_TOKEN_READONLY" in sec_py,
           "环境变量名没落地")
+    # 点「记住」必须连审计一起刷新：以前只刷健康/执行方/流水线，审计面板留着旧的 401，
+    # 用户看到的就是「按钮没反应」。
+    app_js = read(os.path.join(ROOT, "app", "static", "app.js"))
+    save_token_block = app_js.split('el("saveToken").addEventListener("click"', 1)[-1][:900]
+    check("Batch28 点「记住」后审计面板一起刷新（不再挂着旧 401）",
+          "loadAudit()" in save_token_block,
+          "saveToken 回调里没有 loadAudit()")
 
     # 1.9 查询契约：关键字与排序走白名单（不许把 sort 直通给 SQL）
     queries_py = read(os.path.join(ROOT, "app", "api", "routes_queries.py"))

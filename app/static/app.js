@@ -1203,6 +1203,19 @@ function bind() {
     checkHealth();
     loadWorkers();
     loadPipelines();
+    // Batch28 补：以前这里漏了审计面板，点完「记住」运维审计还挂上一次的 401 文字，
+    // 看上去像按钮没反应。连同审计一起刷新，并给一个看得见的按钮反馈。
+    loadAudit();
+    const btn = el("saveToken");
+    if (btn && !btn.dataset.busy) {
+      btn.dataset.busy = "1";
+      const text = btn.textContent;
+      btn.textContent = state.token ? "已记住" : "已清空";
+      setTimeout(() => {
+        btn.textContent = text;
+        delete btn.dataset.busy;
+      }, 900);
+    }
   });
   el("reloadPipes").addEventListener("click", () => { state.page = 1; loadPipelines().then(markRefreshed); });
   if (el("snapPipes")) el("snapPipes").addEventListener("click", saveSnapshot);
