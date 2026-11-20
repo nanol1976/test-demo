@@ -628,7 +628,7 @@ function renderAudit(view, opts = {}) {
   });
   const meta = (view && view.meta) || { total: 0 };
   el("auditCount").textContent = items.length
-    ? `（本页 ${shown.length} 条，共 ${meta.total} 条）` : "";
+    ? `（本页 ${shown.length} 条）` : "";
   renderAuditPager(view, !!opts.filtered);
   if (!items.length) {
     wrap.innerHTML = '<div class="empty">还没有运维动作记录</div>';
