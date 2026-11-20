@@ -78,6 +78,21 @@ if (-not $DryRun) {
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 }
 
+# ---------- 0) 鉴权 token：没显式给就从仓库 .env 里取（Batch27） ----------
+# 平台一开 API_TOKEN，Worker 不带同一个就会被 401 打回；token 不写进命令行以外的地方，
+# 也不打印到控制台（避免日志里留明文）。
+if ([string]::IsNullOrWhiteSpace($Token)) {
+    $EnvFile = Join-Path $Repo ".env"
+    if (Test-Path -LiteralPath $EnvFile) {
+        foreach ($line in (Get-Content -LiteralPath $EnvFile -Encoding UTF8)) {
+            if ($line -match '^\s*API_TOKEN\s*=\s*(.+?)\s*$') {
+                $Token = $Matches[1].Trim().Trim('"').Trim("'")
+            }
+        }
+    }
+}
+if ($Token -ne "") { Say "已从 .env 取到 API_TOKEN（长度 $($Token.Length)，不打印内容）" }
+
 # ---------- 1) 生成 worker-run.bat ----------
 $ArgList = @(
     "`"$Worker`"",

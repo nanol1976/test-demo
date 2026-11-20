@@ -31,6 +31,10 @@ shutil_which = shutil.which
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+# 门禁永远跑「无鉴权」模式（Batch27）：仓库里一旦有 .env（正式 API_TOKEN），
+# 验收脚本的请求会被 401 打回，红的是环境不是代码。空串优先于 .env，等于显式关掉鉴权。
+os.environ["API_TOKEN"] = ""
+
 FAILS = []
 
 # 底座必须业务无关：这些词不许出现在应用代码、迁移与底座文档里
@@ -461,6 +465,26 @@ def stage_static():
     check("快照页不自带脚本、不引外部资源", "<script" not in snap_body and "http" not in snap_body)
     html = read(os.path.join(ROOT, "app", "static", "index.html"))
     check("看板有停滞计数与存快照入口", 'id="pipeStall"' in html and 'id="snapPipes"' in html)
+
+    # 1.5b14 手机/局域网访问（Batch27）：绑定可配、默认可别裸奔、token 不许入库
+    runps = read(os.path.join(ROOT, "deploy", "run.ps1"))
+    check("run.ps1 有 -Bind 参数", "[string]$Bind" in runps)
+    check("run.ps1 默认仍只绑本机 127.0.0.1（要开局域网得显式传）",
+          '[string]$Bind = "127.0.0.1"' in runps, "默认绑定被改成对外了")
+    check("run.ps1 用 -Bind 起服务（不是写死 127.0.0.1）", "--host $Bind" in runps)
+    plat_vbs = read(os.path.join(ROOT, "deploy", "launch-platform-hidden.vbs"))
+    check("平台启动器显式传 -Bind 0.0.0.0（手机才连得上）", "-Bind 0.0.0.0" in plat_vbs)
+    inst2 = read(os.path.join(ROOT, "deploy", "install-windows-tasks.ps1"))
+    check("安装脚本会从 .env 取 API_TOKEN 给 Worker（否则 Worker 被 401）",
+          "API_TOKEN" in inst2 and ".env" in inst2)
+    check("安装脚本不打印 token 明文", "不打印内容" in inst2)
+    gitig = read(os.path.join(ROOT, ".gitignore"))
+    check(".env 不进版本库（token 不能跟着代码走）", "\n.env" in gitig or gitig.startswith(".env"))
+    check("安全模块仍保留「token 为空=不校验、health 永远放行」口径",
+          "api_token" in read(os.path.join(ROOT, "app", "core", "security.py")))
+    css2 = read(os.path.join(ROOT, "app", "static", "style.css"))
+    check("窄屏样式存在（手机单栏 + 表格横滚）",
+          "@media (max-width: 640px)" in css2 and "min-width: 560px" in css2)
 
     # 1.9 查询契约：关键字与排序走白名单（不许把 sort 直通给 SQL）
     queries_py = read(os.path.join(ROOT, "app", "api", "routes_queries.py"))

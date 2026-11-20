@@ -17,6 +17,10 @@ PY = sys.executable
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+# 验收永远跑「无鉴权」模式（Batch27）：仓库里有 .env（正式 token）时，
+# 各 verify 脚本的请求否则会被 401 打回，红的是环境不是代码。
+os.environ["API_TOKEN"] = ""
+
 SCRIPTS = [
     ("Batch2 消息总线", "verify_b2.py"),
     ("Batch3 查询/导出/鉴权", "verify_b3.py"),
@@ -39,6 +43,7 @@ SCRIPTS = [
     ("Batch24 默认库地址改回 mvp.db + data/ 卫生", "verify_b24.py"),
     ("Batch25 explorer 守护 + data/ 每日巡检", "verify_b25.py"),
     ("Batch26 看板：停滞/时间轴/心跳/快照", "verify_b26.py"),
+    ("Batch27 手机访问：绑定可配 + token + 窄屏", "verify_b27.py"),
 ]
 
 
