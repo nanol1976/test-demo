@@ -38,6 +38,7 @@ SCRIPTS = [
     ("Batch23 Windows 部署件入库 + 一键注册三任务", "verify_b23.py"),
     ("Batch24 默认库地址改回 mvp.db + data/ 卫生", "verify_b24.py"),
     ("Batch25 explorer 守护 + data/ 每日巡检", "verify_b25.py"),
+    ("Batch26 看板：停滞/时间轴/心跳/快照", "verify_b26.py"),
 ]
 
 

@@ -444,6 +444,22 @@ def stage_static():
           all("mw_platform" not in read(os.path.join(ROOT, r)) for r in
               ("app/core/config.py", "deploy/run.ps1", "scripts/verify_r2.py")))
 
+    # 1.5b13 看板台账增强（Batch26）：停滞 / 心跳 / 时间轴 / 快照
+    appjs = read(os.path.join(ROOT, "app", "static", "app.js"))
+    check("停滞判定有独立阈值常量（不许散落魔法数）", "const STALL_MS" in appjs)
+    check("停滞与滞留分开命名（排队不许被误读成卡死）",
+          "stallInfo" in appjs and "滞留" in appjs and "停滞" in appjs)
+    check("执行方最近上报改成「N 前」+ 超时红字", "heartbeatNode" in appjs and "hb late" in appjs)
+    check("并发用刻度渲染（点=在跑槽位）", "concurNode" in appjs and 'className = "dots"' in appjs)
+    check("流水线有单行时间轴（按本页最长耗时归一）",
+          "buildRail" in appjs and "rail-fill" in appjs and "pipeMaxMs" in appjs)
+    check("快照在前端本地生成（Blob + createObjectURL，不添接口）",
+          "function snapshotHtml" in appjs and "URL.createObjectURL" in appjs)
+    snap_body = appjs.split("function snapshotHtml")[1].split("function saveSnapshot")[0]
+    check("快照页不自带脚本、不引外部资源", "<script" not in snap_body and "http" not in snap_body)
+    html = read(os.path.join(ROOT, "app", "static", "index.html"))
+    check("看板有停滞计数与存快照入口", 'id="pipeStall"' in html and 'id="snapPipes"' in html)
+
     # 1.9 查询契约：关键字与排序走白名单（不许把 sort 直通给 SQL）
     queries_py = read(os.path.join(ROOT, "app", "api", "routes_queries.py"))
     ledger_py = read(os.path.join(ROOT, "app", "repositories", "ledger.py"))

@@ -53,7 +53,8 @@
     </div>
 
     <div class="panel">
-      <h2>流水线<span class="count" id="pipeCount"></span></h2>
+      <h2>流水线<span class="count" id="pipeCount"></span><span class="count" id="pipeStall"></span></h2>
+      <details class="hint"><summary>这四栏新看的什么（Batch26）</summary><p><b>停滞</b>=状态还是 pending/running 但已经 <span class="mono">10 分钟</span>没收尾，行首加一道墨线、状态旁盖「停滞 Nm」章；<b>进度</b>=建单到收尾（未收尾就按"到现在"）的一条细线，长度按本页最长耗时归一，同页能横向比谁拖得久；<b>执行方</b>的「最近上报」改成"N 前"，超过心跳超时（120s）红字；<b>并发</b>改成刻度，实心点=正在跑的槽位。<br>「存快照」会把当前这一页和筛选条件打成一份自带数据的单文件 HTML——不连服务、不登录也能打开看。</p></details>
       <div class="toolbar">
         <select id="pipeStatus">
           <option value="">全部状态</option>
@@ -69,6 +70,7 @@
           <option value="start_time_asc">时间：最早在前</option>
         </select>
         <button id="reloadPipes">刷新</button>
+        <button class="ghost" id="snapPipes" title="把当前这一页打成单文件 HTML，离网也能看">存快照</button>
         <select id="autoRefresh" title="自动刷新间隔">
           <option value="0">自动刷新：关</option>
           <option value="5000">每 5 秒</option>

@@ -222,6 +222,49 @@ td .mono, .mono { font-family: var(--mono); font-size: 12px; letter-spacing: -.0
   color: var(--sheet); font-weight: 700; letter-spacing: .04em;
 }
 
+/* ---------- Batch26：停滞 / 单行时间轴 / 心跳 / 并发刻度 ----------
+   全是在台账里加"旁批"：细线、方章、实心点，不加投影、不加彩色底。 */
+.tag.stall-tag { margin-left: 6px; border-style: dashed; }   /* 虚线章：临时状态，不是结论 */
+.count.stall-count { color: var(--warn); font-weight: 700; }
+
+tbody tr.stalled td { box-shadow: inset 2px 0 0 var(--warn); }
+tbody tr.stalled.selected td { box-shadow: inset 2px 0 0 var(--warn); }
+
+/* 单行时间轴：一条 1px 底线 + 一段 2px 填充 + 端点，长度=本页最长耗时归一 */
+.rail-box { display: flex; align-items: center; gap: 8px; }
+.rail { position: relative; display: block; width: 84px; height: 14px; flex: 0 0 84px; }
+.rail::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 6px;
+  border-top: 1px solid var(--rule);
+}
+.rail-fill { position: absolute; left: 0; top: 6px; height: 2px; display: block; }
+.rail-fill.open { background: var(--ink-2); }
+.rail-fill.done { background: var(--stamp); }
+.rail-fill.halt { background: var(--bad); }
+.rail-dot {
+  position: absolute; top: 3px; width: 7px; height: 7px; margin-left: -3.5px;
+  border-radius: 50%; display: block; background: var(--ink-2);
+}
+.rail-dot.done { background: var(--stamp); }
+.rail-dot.halt { background: var(--bad); }
+.rail-dot.open { background: transparent; border: 1px solid var(--ink-2); }
+.rail-lab { font-size: 12px; color: var(--muted); min-width: 48px; text-align: right; }
+
+/* 并发刻度：一个实心点 = 一个正在跑的槽位 */
+.dots-box { display: inline-flex; align-items: center; gap: 6px; }
+.dots { display: inline-flex; align-items: center; gap: 2px; }
+.dots i {
+  width: 6px; height: 6px; border-radius: 50%;
+  border: 1px solid var(--rule); background: transparent;
+}
+.dots i.on { background: var(--stamp); border-color: var(--stamp); }
+.dots-lab { font-size: 12px; color: var(--muted); }
+.conc-raw { margin-left: 8px; font-size: 11.5px; }
+
+/* 心跳：超过超时阈值直接红字，不再用一串时钟时间 */
+.hb { font-size: 12px; color: var(--muted); }
+.hb.late { color: var(--bad); font-weight: 700; }
+
 /* ---------- 其余 ---------- */
 .muted { color: var(--muted); }
 /* 空状态与表尾注释共用：都不加图标，只留一条线 */

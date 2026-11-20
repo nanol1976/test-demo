@@ -48,6 +48,11 @@ const RESULT_MAX_CHARS = 20000;
 const AUTO_KEY = "mwp_auto_refresh_ms";
 const AUDIT_PAGE = 20;            // 审计每页条数（Batch22）
 const OPERATOR_KEY = "mwp_operator";
+// Batch26：卡住判定与心跳口径
+const STALL_MS = 10 * 60 * 1000;            // 未结束且超过 10 分钟 → 判停滞
+const STALL_STATUSES = ["pending", "running"];
+const HEARTBEAT_WARN_MS = WORKER_ONLINE_MS;  // 与平台心跳超时同口径
+const SNAP_TZ = "本地时间";
 
 function el(id) { return document.getElementById(id); }
 
@@ -149,17 +154,36 @@ function renderPipelines(payload) {
   el("pipeNext").disabled = (meta.page || 1) >= state.pages;
 
   const items = payload.items || [];
+  lastPipes = { items, meta };
   if (!items.length) {
     wrap.innerHTML = '<div class="empty">没有符合条件的流水线</div>';
     listRows.clear();
+    if (el("pipeStall")) el("pipeStall").textContent = "";
+    state.pipeMaxMs = 0;
     return;
+  }
+
+  // Batch26：本页最长耗时做时间轴归一，停滞条数进抬头
+  const now = Date.now();
+  let maxMs = 0;
+  items.forEach((p) => {
+    const span = pipeSpan(p, now);
+    if (Number.isFinite(span.ms) && span.ms > maxMs) maxMs = span.ms;
+  });
+  state.pipeMaxMs = maxMs;
+  const stallCount = items.filter((p) => { const s = stallInfo(p, now); return s && s.label === "停滞"; }).length;
+  const dwellCount = items.filter((p) => { const s = stallInfo(p, now); return s && s.label === "滞留"; }).length;
+  if (el("pipeStall")) {
+    el("pipeStall").textContent = (stallCount || dwellCount)
+      ? `（停滞 ${stallCount} · 滞留 ${dwellCount}）` : "";
+    el("pipeStall").className = (stallCount || dwellCount) ? "count stall-count" : "count";
   }
 
   let table = wrap.querySelector("table");
   if (!table) {
     wrap.innerHTML = "";
     table = document.createElement("table");
-    table.innerHTML = "<thead><tr><th>trace_id</th><th>状态</th><th>暂停</th><th>起始时间</th><th>原始需求</th></tr></thead>";
+    table.innerHTML = "<thead><tr><th>trace_id</th><th>状态</th><th>进度</th><th>暂停</th><th>起始时间</th><th>原始需求</th></tr></thead>";
     table.appendChild(document.createElement("tbody"));
     wrap.appendChild(table);
   }
@@ -192,7 +216,7 @@ function buildPipelineRow(p) {
   row.className = "clickable";
   row.dataset.trace = p.trace_id;
   const cells = {};
-  ["trace", "status", "pause", "time", "demand"].forEach((k) => {
+  ["trace", "status", "rail", "pause", "time", "demand"].forEach((k) => {
     cells[k] = document.createElement("td");
     row.appendChild(cells[k]);
   });
@@ -202,11 +226,28 @@ function buildPipelineRow(p) {
 }
 
 function updatePipelineRow(rec, p) {
-  if (rec.last.status !== p.overall_status) {
-    rec.last.status = p.overall_status;
+  const now = Date.now();
+  const stall = stallInfo(p, now);
+  // 状态 + 超时章 + 时间轴一起判签名：变了才重画，没变不折腾 DOM
+  const sig = [p.overall_status, p.start_time, p.end_time, stall ? stall.label : "",
+    stall ? Math.floor(stall.ms / 60000) : 0].join("|");
+  if (rec.last.cellSig !== sig) {
+    rec.last.cellSig = sig;
     rec.cells.status.innerHTML = "";
     rec.cells.status.appendChild(tag(p.overall_status));
+    if (stall) {
+      const stamp = document.createElement("span");
+      stamp.className = "tag warn stall-tag";
+      stamp.textContent = stall.label + " " + fmtDur(stall.ms);
+      stamp.title = stall.label === "停滞"
+        ? `该在跑却已 ${fmtDur(stall.ms)} 没动静（阈值 ${Math.round(STALL_MS / 60000)} 分钟）`
+        : `建单后 ${fmtDur(stall.ms)} 一直没被领走（阈值 ${Math.round(STALL_MS * 3 / 60000)} 分钟）`;
+      rec.cells.status.appendChild(stamp);
+    }
+    rec.cells.rail.innerHTML = "";
+    rec.cells.rail.appendChild(buildRail(p, now, state.pipeMaxMs || 0));
   }
+  rec.row.classList.toggle("stalled", !!stall);
   const pause = p.pause_flag ? "已暂停" : "正常";
   if (rec.last.pause !== pause) {
     rec.last.pause = pause;
@@ -436,6 +477,122 @@ function fmtStamp(v, withSec) {
   return withSec ? `${base}:${p2(d.getSeconds())}` : base;
 }
 
+/* ---------- Batch26：停滞判定 / 心跳 / 单行时间轴（都只用已有字段，不扩接口）---------- */
+function fmtAgo(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s 前`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m 前`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h${String(m % 60).padStart(2, "0")}m 前`;
+  return `${Math.floor(h / 24)}d 前`;
+}
+
+function fmtDur(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h${String(m % 60).padStart(2, "0")}m`;
+  return `${Math.floor(h / 24)}d${String(h % 24).padStart(2, "0")}h`;
+}
+
+// 起止都来自 aspect：start_time 建单、end_time 收尾；未收尾就按"到现在"算已耗
+function pipeSpan(p, now) {
+  const start = p.start_time ? new Date(p.start_time).getTime() : NaN;
+  const end = p.end_time ? new Date(p.end_time).getTime() : now;
+  if (!Number.isFinite(start)) return { ms: NaN, open: !p.end_time };
+  return { ms: Math.max(0, end - start), open: !p.end_time };
+}
+
+function isStalled(p, now) {
+  return stallInfo(p, now) !== null;
+}
+
+// running 超 10 分钟=停滞（该在跑却不动）；pending 超 30 分钟=滞留（一直没人领）
+// 两者分开命名，免得"排着队"被误读成"卡死了"
+function stallInfo(p, now) {
+  if (!p.start_time || p.end_time) return null;
+  const span = pipeSpan(p, now);
+  if (!Number.isFinite(span.ms)) return null;
+  if (p.overall_status === "running" && span.ms >= STALL_MS) return { label: "停滞", ms: span.ms };
+  if (p.overall_status === "pending" && span.ms >= STALL_MS * 3) return { label: "滞留", ms: span.ms };
+  return null;
+}
+
+// 单行时间轴：条长按本页最长耗时归一到 100%，所以同页能横向比"谁拖得久"
+function buildRail(p, now, maxMs) {
+  const holder = document.createElement("div");
+  holder.className = "rail-box";
+  const span = pipeSpan(p, now);
+  let pct = 8;
+  if (Number.isFinite(span.ms) && maxMs > 0) pct = Math.max(8, Math.min(100, (span.ms / maxMs) * 100));
+  const rail = document.createElement("span");
+  rail.className = "rail";
+  const tone = !p.end_time ? "open" : (p.overall_status === "success" ? "done" : "halt");
+  const fill = document.createElement("i");
+  fill.className = "rail-fill " + tone;
+  fill.style.width = pct + "%";
+  rail.appendChild(fill);
+  const dot = document.createElement("b");
+  dot.className = "rail-dot " + tone;
+  dot.style.left = pct + "%";
+  rail.appendChild(dot);
+  rail.title = `建单 ${fmtStamp(p.start_time, true)}` + (p.end_time
+    ? ` → 收尾 ${fmtStamp(p.end_time, true)}，耗时 ${fmtDur(span.ms)}`
+    : ` → 至今 ${fmtDur(span.ms)}（未收尾）`);
+  holder.appendChild(rail);
+  const lab = document.createElement("span");
+  lab.className = "rail-lab num";
+  lab.textContent = fmtDur(span.ms);
+  holder.appendChild(lab);
+  return holder;
+}
+
+// 心跳：显示"多久之前"，超时直接红字（判断口径与后端 online 一致：120s）
+function heartbeatNode(w, now) {
+  const last = w.last_seen ? new Date(w.last_seen).getTime() : NaN;
+  if (!Number.isFinite(last)) return text("—", "muted");
+  const ageMs = Math.max(0, now - last);
+  const node = document.createElement("span");
+  node.className = "hb" + (ageMs > HEARTBEAT_WARN_MS ? " late" : "");
+  node.textContent = fmtAgo(ageMs);
+  node.title = `最近上报 ${fmtStamp(w.last_seen, true)}（超过 ${Math.round(HEARTBEAT_WARN_MS / 1000)}s 判失联）`;
+  return node;
+}
+
+// 并发刻度：一个点 = 一个正在跑的槽位，空圈 = 还没用上的槽位
+function concurNode(w) {
+  const total = Math.max(0, Number(w.concurrency) || 0);
+  const used = Math.max(0, Math.min(total, Number(w.in_flight) || 0));
+  const box = document.createElement("span");
+  box.className = "dots";
+  const cap = Math.min(total, 8);
+  for (let i = 0; i < cap; i += 1) {
+    const d = document.createElement("i");
+    d.className = i < used ? "on" : "off";
+    box.appendChild(d);
+  }
+  if (total > cap) {
+    const more = document.createElement("span");
+    more.className = "muted";
+    more.textContent = `+${total - cap}`;
+    box.appendChild(more);
+  }
+  box.title = `在跑 ${used} / 并发上限 ${total}`;
+  const lab = document.createElement("span");
+  lab.className = "num dots-lab";
+  lab.textContent = `${used}/${total}`;
+  const holder = document.createElement("span");
+  holder.className = "dots-box";
+  holder.appendChild(box);
+  holder.appendChild(lab);
+  return holder;
+}
+
 function workerRegistryState(w) {
   if (w.status === "stopped") return { label: "停机", cls: "idle" };
   if (w.status === "stopping") return { label: "收尾中", cls: "warn" };
@@ -513,7 +670,7 @@ function renderRegistry(workers) {
   }
   const table = document.createElement("table");
   const head = document.createElement("tr");
-  ["执行方", "实例", "状态", "在跑", "并发", "期望上限", "配额下发", "累计完成", "最近上报", "备注"].forEach((h) => {
+  ["执行方", "实例", "状态", "并发", "期望上限", "配额下发", "累计完成", "最近上报", "备注"].forEach((h) => {
     const th = document.createElement("th");
     th.textContent = h;
     head.appendChild(th);
@@ -530,8 +687,10 @@ function renderRegistry(workers) {
     span.textContent = st.label;
     stCell.appendChild(span);
     tr.appendChild(stCell);
-    tr.appendChild(td(`${w.in_flight}`, "num"));
-    tr.appendChild(td(`${w.limit}/${w.concurrency}`, "num"));
+    // Batch26：并发改成刻度（点=在跑的槽位，空圈=剩余槽位），一个格子同时给点和数字
+    const concCell = document.createElement("td");
+    concCell.appendChild(concurNode(w));
+    tr.appendChild(concCell);
     // Batch22：期望值下发后 Worker 还没按它跑，就地标出来，不用等审计翻页
     const wantCell = td(w.desired_limit ? String(w.desired_limit) : "—", w.desired_limit ? "num" : "muted");
     if (w.desired_limit && w.concurrency !== w.desired_limit) {
@@ -562,7 +721,10 @@ function renderRegistry(workers) {
     quotaCell.appendChild(btn);
     tr.appendChild(quotaCell);
     tr.appendChild(td(String(w.handled), "num"));
-    tr.appendChild(td(new Date(w.last_seen).toLocaleTimeString()));
+    // Batch26：最近上报给"N 前"，超过心跳超时直接红字（比一串时钟时间好读）
+    const hbCell = document.createElement("td");
+    hbCell.appendChild(heartbeatNode(w, Date.now()));
+    tr.appendChild(hbCell);
     tr.appendChild(td(w.note || "—", "muted"));
     table.appendChild(tr);
   });
@@ -578,6 +740,7 @@ function renderRegistry(workers) {
 }
 
 let lastWorkers = [];
+let lastPipes = { items: [], meta: {} };   // Batch26：快照导出要用当前页数据
 
 async function loadWorkers() {
   // Batch13：优先读执行方注册表；平台老版本（没有该接口）时退回按任务聚合。
@@ -896,6 +1059,104 @@ async function queryArchive() {
   }
 }
 
+/* ---------- Batch26：存一份自带数据的快照（单文件 HTML，双击就能看） ---------- */
+function esc(s) {
+  return String(s === null || s === undefined ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function snapshotHtml() {
+  const now = Date.now();
+  const items = (lastPipes.items || []);
+  const meta = lastPipes.meta || {};
+  const filters = [
+    state.status ? `状态=${state.status}` : "状态=全部",
+    state.q ? `关键字=${state.q}` : "关键字=无",
+    state.sort === "start_time_asc" ? "时间：最早在前" : "时间：最新在前",
+  ].join("；");
+  let maxMs = 0;
+  items.forEach((p) => { const s = pipeSpan(p, now); if (Number.isFinite(s.ms) && s.ms > maxMs) maxMs = s.ms; });
+  const stalled = items.filter((p) => stallInfo(p, now));
+
+  const pipeRows = items.map((p) => {
+    const s = pipeSpan(p, now);
+    const st = stallInfo(p, now);
+    return "<tr" + (st ? ' class="bad"' : "") + ">"
+      + `<td class="mono">${esc(p.trace_id)}</td>`
+      + `<td>${esc(p.overall_status)}${st ? ' <span class="stamp">' + esc(st.label) + " " + fmtDur(st.ms) + "</span>" : ""}</td>`
+      + `<td class="num">${p.end_time ? fmtDur(s.ms) : fmtDur(s.ms) + "（未收尾）"}</td>`
+      + `<td class="num">${esc(fmtStamp(p.start_time))}</td>`
+      + `<td class="num">${esc(fmtStamp(p.end_time))}</td>`
+      + `<td>${esc(p.pause_flag ? "已暂停" : "正常")}</td>`
+      + `<td>${esc(p.original_demand)}</td></tr>`;
+  }).join("");
+
+  const workers = (lastWorkers || []).filter((w) => {
+    if (state.workerFilter && w.worker_id !== state.workerFilter) return false;
+    if (state.workerOnlineOnly && !w.online) return false;
+    return true;
+  });
+  const workerRows = workers.map((w) => {
+    const last = w.last_seen ? new Date(w.last_seen).getTime() : NaN;
+    const age = Number.isFinite(last) ? now - last : NaN;
+    const late = Number.isFinite(age) && age > HEARTBEAT_WARN_MS;
+    return "<tr>" + `<td class="mono">${esc(w.worker_id)}</td><td class="mono">${esc(w.instance_id || "default")}</td>`
+      + `<td>${esc(workerRegistryState(w).label)}</td>`
+      + `<td class="num">${esc(w.in_flight)}/${esc(w.concurrency)}</td>`
+      + `<td class="num">${esc(w.handled)}</td>`
+      + `<td class="${late ? "late" : ""}">${esc(fmtAgo(age))}</td></tr>`;
+  }).join("");
+
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<title>调度台账快照 · ${esc(new Date(now).toISOString().slice(0, 10))}</title>
+<style>
+body{margin:0;padding:28px 32px;background:#f1f2ec;color:#171a15;
+  font:14px/1.6 "Microsoft YaHei","PingFang SC","Hiragino Sans GB",sans-serif;}
+h1{margin:0 0 4px;font-size:20px;letter-spacing:.06em;font-weight:700;}
+h2{margin:26px 0 6px;font-size:13px;letter-spacing:.08em;font-weight:700;
+  border-bottom:2px solid #171a15;padding-bottom:4px;}
+.meta{color:#6e7265;font-size:12.5px;border-top:2px solid #171a15;padding-top:8px;margin-bottom:2px;}
+table{width:100%;border-collapse:collapse;font-size:12.5px;}
+th{text-align:left;font-size:11.5px;letter-spacing:.02em;padding:6px 8px;
+  border-top:1px solid #b9bdb0;border-bottom:1px solid #b9bdb0;}
+td{padding:7px 8px;border-bottom:1px dotted #cfd3c6;color:#464a40;vertical-align:top;}
+tr.bad td{box-shadow:inset 2px 0 0 #8a5a12;}
+.mono{font-family:Consolas,"Cascadia Mono",Menlo,monospace;font-size:12px;}
+.num{text-align:right;white-space:nowrap;}
+.stamp{border:1px solid #8a5a12;border-radius:2px;padding:0 5px;font-size:11px;color:#8a5a12;}
+.late{color:#8b2e22;}
+footer{margin-top:22px;color:#6e7265;font-size:12px;border-top:1px solid #b9bdb0;padding-top:8px;}
+</style></head><body>
+<h1>调度台账快照</h1>
+<div class="meta">生成时间 ${esc(fmtStamp(new Date(now).toISOString(), true))}　·　生成人 ${esc(state.operator || "（未填）")}
+　·　筛选 ${esc(filters)}　·　第 ${esc(meta.page || 1)}/${esc(meta.pages || 1)} 页，共 ${esc(meta.total || items.length)} 条</div>
+<h2>流水线 ${stalled.length ? `（超时 ${stalled.length} 条）` : ""}</h2>
+<table><thead><tr><th>trace_id</th><th>状态</th><th>耗时</th><th>起始</th><th>收尾</th><th>暂停</th><th>原始需求</th></tr></thead>
+<tbody>${pipeRows || '<tr><td colspan="7">没有符合条件的流水线</td></tr>'}</tbody></table>
+<h2>执行方</h2>
+<table><thead><tr><th>执行方</th><th>实例</th><th>状态</th><th>在跑/并发</th><th>累计完成</th><th>最近上报</th></tr></thead>
+<tbody>${workerRows || '<tr><td colspan="6">没有执行方上报</td></tr>'}</tbody></table>
+<footer>本文件自带数据，不连服务也能看；数据截止上面的生成时间。<br>
+由调度台账看板导出，同一份数据的机器可读版本见详情页的「导出 JSON / CSV」。</footer>
+</body></html>`;
+}
+
+function saveSnapshot() {
+  const html = snapshotHtml();
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const stamp = new Date();
+  const p2 = (n) => String(n).padStart(2, "0");
+  a.href = url;
+  a.download = `调度台账快照-${stamp.getFullYear()}${p2(stamp.getMonth() + 1)}${p2(stamp.getDate())}-${p2(stamp.getHours())}${p2(stamp.getMinutes())}.html`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
 function bind() {
   el("saveToken").addEventListener("click", () => {
     state.token = el("tokenInput").value.trim();
@@ -905,6 +1166,7 @@ function bind() {
     loadPipelines();
   });
   el("reloadPipes").addEventListener("click", () => { state.page = 1; loadPipelines().then(markRefreshed); });
+  if (el("snapPipes")) el("snapPipes").addEventListener("click", saveSnapshot);
   el("autoRefresh").addEventListener("change", (e) => setAutoRefresh(e.target.value));
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && state.autoMs) {
