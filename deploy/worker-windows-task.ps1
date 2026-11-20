@@ -7,6 +7,8 @@
 #      看日志：Get-Content "$Repo\run\worker.out.log" -Tail 50 -Wait
 #
 # 设计要点（都是踩过坑之后定下来的）：
+#   - **任务动作是隐藏 VBS（wscript）**，不是 cmd.exe：后者每次拉起都会在桌面闪一个控制台窗口；
+#     同时 VBS 等待子进程结束，任务状态才等于“Worker 在不在”。
 #   - **不直接让计划任务执行 python.exe**：本脚本生成并注册 run\worker-run.bat，
 #     由 bat 设 PYTHONPATH、重定向日志、把退出码透传出来。否则日志重定向和退出码都不可靠，
 #     "崩了能不能被拉起"根本没法判断。
@@ -60,7 +62,21 @@ $BatLines = @(
 )
 [System.IO.File]::WriteAllLines($BatPath, $BatLines, (New-Object System.Text.UTF8Encoding($false)))
 
-$Action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c $BatPath" -WorkingDirectory $Repo
+# Batch17：任务动作改成“隐藏 VBS 启动器”，不直接挂 cmd.exe。
+# 直接挂 cmd.exe 时，计划任务在“仅当用户登录时”运行会先建一个控制台窗口，
+# 你会在桌面上看到它（每次拉起闪一下）。wscript 的 Run(cmd, 0, True) 根本不创建窗口，
+# 并且等待子进程结束 —— 任务状态才真实反映 Worker 存活，IgnoreNew 才能真正抑制重复触发。
+$VbsPath = Join-Path $LogDir "launch-worker-hidden.vbs"
+$VbsBody = @"
+' 无窗口启动 Worker（Run 第二参数 0 = 不创建控制台窗口；True = 等它结束）
+Dim sh, cmd
+cmd = "cmd.exe /c ""$BatPath"" >> ""$LogFile"" 2>&1"
+Set sh = CreateObject("WScript.Shell")
+sh.Run cmd, 0, True
+"@
+[System.IO.File]::WriteAllText($VbsPath, $VbsBody, (New-Object System.Text.UTF8Encoding($false)))
+
+$Action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//nologo `"$VbsPath`"" -WorkingDirectory $Repo
 $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $Trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
     -RepetitionInterval (New-TimeSpan -Minutes 1) `

@@ -32,6 +32,7 @@ SCRIPTS = [
     ("Batch14 多实例标识（worker_id + instance_id）", "verify_b14.py"),
     ("Batch15 实例并发配额下发/看板筛选", "verify_b15.py"),
     ("Batch16 并发配额下发审计（append-only）", "verify_b16.py"),
+    ("Batch17 Windows 计划任务静默化（不弹窗）", "verify_b17.py"),
 ]
 
 

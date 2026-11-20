@@ -148,6 +148,7 @@ POST /api/messages                                    # 报活 / 交活 / 报做
 | 在线判定 | 平台算：`status=running` 且 `last_seen` 在 `heartbeat_timeout_seconds`（默认 120s）内 → 在线；`stopping/stopped` 一律不算在线。平台没有 `/api/workers`（老版本）时 Worker 只记一条 `registry_unsupported`，照常干活 |
 | 与任务心跳的区别 | 任务心跳（`task_heartbeat`）说"某个任务还在跑"并刷新 `last_heartbeat_time`；注册表说"这个进程还活着"。两者互补，缺一个看板就有盲区 |
 | 关闭上报 | `--no-register`（不想被记录时用；不影响领活/回传） |
+| Windows 静默启动（Batch17） | 计划任务**动作必须是 `wscript.exe` 跑隐藏 VBS**，不能直接挂 `cmd.exe` / `powershell.exe`：后者在"仅当用户登录时"运行会先建控制台窗口，`-WindowStyle Hidden` 只是事后隐藏 → 桌面闪一下。VBS 用 `sh.Run cmd, 0, True`（0=不创建窗口，True=等子进程结束，任务状态才等于服务存活）。看门狗**运行时不自注册**，只有 `-Install` 才注册 |
 | 查询 | `GET /api/workers` 全量 / `?online=true` 只看活的 / `?worker_id=workbuddy` 只看某个执行方的全部实例 |
 
 ## 七、重试

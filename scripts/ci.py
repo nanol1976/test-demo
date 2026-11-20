@@ -325,6 +325,24 @@ def stage_static():
     check("审计查询走 CLI（没为它开接口）",
           os.path.exists(os.path.join(ROOT, "scripts", "quota_audit.py")))
 
+    # 1.5b7 Windows 计划任务静默化红线（Batch17）
+    task_ps1 = read(os.path.join(ROOT, "deploy", "worker-windows-task.ps1"))
+    wd_ps1 = read(os.path.join(ROOT, "deploy", "worker-windows-watchdog.ps1"))
+    check("Worker 任务动作用 wscript（不直接挂 cmd，避免桌面闪窗）",
+          '-Execute "wscript.exe"' in task_ps1 and '-Execute "cmd.exe"' not in task_ps1)
+    check("隐藏启动器用 sh.Run cmd, 0, True（隐藏 + 等待子进程）",
+          "sh.Run cmd, 0, True" in task_ps1, "0 或 True 缺一个就会出现窗口/状态失真")
+    wd_code = re.sub(r"<#[\s\S]*?#>", "",
+                     "\n".join(ln for ln in wd_ps1.splitlines()
+                               if not ln.lstrip().startswith("#")))
+    wd_guard = wd_code.find("if ($Install)")
+    wd_reg = wd_code.rfind("Register-ScheduledTask")
+    check("看门狗运行时不自注册（注册只在 -Install）",
+          "[switch]$Install" in wd_ps1 and wd_guard != -1 and wd_reg > wd_guard
+          and wd_code[:wd_guard].count("Register-ScheduledTask") == 0,
+          "运行期自注册会导致每分钟重建任务、反复弹窗")
+    check("看门狗也用隐藏 VBS 启动", "sh.Run cmd, 0, True" in wd_ps1)
+
     # 1.5c 越权与重放红线（Batch10）：权限校验不能被"顺手删掉"
     dispatch_py = read(os.path.join(ROOT, "app", "services", "dispatch.py"))
     owner_calls = re.findall(r"_require_owner\(task, envelope, \"task_(\w+)\"", dispatch_py)
