@@ -446,10 +446,12 @@ def stage_static():
 
     # 1.5b13 看板台账增强（Batch26）：停滞 / 心跳 / 时间轴 / 快照
     appjs = read(os.path.join(ROOT, "app", "static", "app.js"))
+    cssjs = read(os.path.join(ROOT, "app", "static", "style.css"))
     check("停滞判定有独立阈值常量（不许散落魔法数）", "const STALL_MS" in appjs)
     check("停滞与滞留分开命名（排队不许被误读成卡死）",
           "stallInfo" in appjs and "滞留" in appjs and "停滞" in appjs)
-    check("执行方最近上报改成「N 前」+ 超时红字", "heartbeatNode" in appjs and "hb late" in appjs)
+    check("执行方最近上报改成「N 前」+ 超时红字",
+          "heartbeatNode" in appjs and "fmtAgo" in appjs and ".hb.late" in cssjs)
     check("并发用刻度渲染（点=在跑槽位）", "concurNode" in appjs and 'className = "dots"' in appjs)
     check("流水线有单行时间轴（按本页最长耗时归一）",
           "buildRail" in appjs and "rail-fill" in appjs and "pipeMaxMs" in appjs)
