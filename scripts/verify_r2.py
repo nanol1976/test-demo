@@ -6,11 +6,21 @@ from datetime import datetime, timezone
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from app.models import Base
 from app.schemas import Envelope
 from app.services import ArchiveService
 from app.repositories.ledger import LedgerRepository
 
-DB = "data/mw_platform.db"
+DB = "data/verify_r2.db"   # Batch24：不再借用历史空库名
+
+# Batch24：换库名后要自己建表（原来依赖那个历史空库里已经建好的结构）
+import os
+os.makedirs("data", exist_ok=True)
+if os.path.exists(DB):
+    os.remove(DB)
+_engine = create_engine(f"sqlite:///./{DB}")
+Base.metadata.create_all(_engine)
+_engine.dispose()
 
 print("=== A. 表结构里的约束 ===")
 con = sqlite3.connect(DB)

@@ -425,6 +425,14 @@ def stage_static():
                         "deploy/worker-windows-watchdog.ps1",
                         "deploy/worker-windows-task.ps1")))
 
+    # 1.5b11 库地址红线（Batch24）：默认值不许再指向空库名
+    cfg_py = read(os.path.join(ROOT, "app", "core", "config.py"))
+    check("默认库地址是 data/mvp.db",
+          'database_url: str = "sqlite:///./data/mvp.db"' in cfg_py, "默认库地址又指歪了")
+    check("代码/部署件里不再出现历史空库名 mw_platform",
+          all("mw_platform" not in read(os.path.join(ROOT, r)) for r in
+              ("app/core/config.py", "deploy/run.ps1", "scripts/verify_r2.py")))
+
     # 1.9 查询契约：关键字与排序走白名单（不许把 sort 直通给 SQL）
     queries_py = read(os.path.join(ROOT, "app", "api", "routes_queries.py"))
     ledger_py = read(os.path.join(ROOT, "app", "repositories", "ledger.py"))

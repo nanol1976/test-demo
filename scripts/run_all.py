@@ -36,6 +36,7 @@ SCRIPTS = [
     ("Batch18 审计覆盖全部指令 + 只读查询接口", "verify_b18.py"),
     ("Batch22 审计真分页 + 操作者留痕 + 配额可见反馈", "verify_b22.py"),
     ("Batch23 Windows 部署件入库 + 一键注册三任务", "verify_b23.py"),
+    ("Batch24 默认库地址改回 mvp.db + data/ 卫生", "verify_b24.py"),
 ]
 
 

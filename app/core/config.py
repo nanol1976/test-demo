@@ -6,7 +6,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    database_url: str = "sqlite:///./data/mw_platform.db"
+    # Batch24：默认库地址改回 mvp.db。原先默认指向一个"结构建好、一行数据都没有"的历史空库，
+    # 手敲 uvicorn（不带 DATABASE_URL）就会连过去：看板不报错、数据全空，第一反应永远是"数据被删了"。
+    database_url: str = "sqlite:///./data/mvp.db"
     archive_root: str = "./archive"
     log_level: str = "INFO"
     bus_capacity: int = 1000
