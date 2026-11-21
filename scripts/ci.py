@@ -664,6 +664,40 @@ def stage_static():
           "from __future__ import annotations" in snap_py31,
           "缺 future import，3.9 会报 PEP604")
 
+    # 1.8f Batch32-A：Windows 收编开关与设计稿在位。
+    # 收编那台机器只改了安装脚本三个开关（岗位名、口令档、只重生成 bat），
+    # 红线守的是「以后换一台机器也能照单执行」，别让这三个开关被删回去。
+    check("Batch32 安装脚本支持 -InstanceId（岗位名可传）", '$InstanceId = ""' in inst2)
+    check("Batch32 安装脚本支持 -UseWorkerToken（口令档可切）",
+          '[switch]$UseWorkerToken' in inst2
+          and '$TokenKey = if ($UseWorkerToken) { "API_TOKEN_WORKER" } else { "API_TOKEN" }' in inst2,
+          "口令键没按开关切换")
+    check("Batch32 安装脚本支持 -OnlyBat（只重生成 bat、不动计划任务）",
+          "[switch]$OnlyBat" in inst2 and "if ($OnlyBat) {" in inst2)
+    check("Batch32 岗位名非空时真的落进 worker 命令行",
+          '$ArgList += @("--instance-id", $InstanceId)' in inst2)
+    doc09 = read(os.path.join(ROOT, "docs", "base", "09-Worker契约.md"))
+    doc15 = read(os.path.join(ROOT, "docs", "base", "15-岗位与权限.md"))
+    check("Batch32 老 Worker 兼容策略写进 Worker 契约（有意隔离）",
+          "岗位与实例级路由" in doc09 and "有意隔离" in doc09, "09 号文档缺第八节")
+    check("Batch32 Windows 收编记录写进岗位文档（十一·四 与 ops-win 都在）",
+          "十一·四" in doc15 and "ops-win" in doc15, "15 号文档没记录收编")
+    check("Batch32 异构助手编队实测写进岗位文档（十一·六）",
+          "十一·六" in doc15 and "headless" in doc15, "15 号文档缺编队实测")
+    design16 = os.path.join(ROOT, "docs", "base", "16-异构复核与插件沉淀.md")
+    check("Batch32 异构复核设计稿在位", os.path.exists(design16))
+    if os.path.exists(design16):
+        d16 = read(design16)
+        check("Batch32 设计稿含复核三列（review_of / review_verdict / review_items）",
+              all(k in d16 for k in ("review_of", "review_verdict", "review_items")), "三列没写全")
+        check("Batch32 设计稿守住四条防作弊约束",
+              all(k in d16 for k in ("与执行者不同", "不递归", "条数", "只写一次")),
+              "约束缺项")
+        check("Batch32 设计稿不改接口面（只加 TaskView 字段）",
+              "不加路径" in d16, "设计稿没说接口面不动")
+    idx00 = read(os.path.join(ROOT, "docs", "base", "00-索引目录.md"))
+    check("Batch32 设计稿在索引里登记过", "16-异构复核与插件沉淀" in idx00)
+
     # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
     # 不许各处自己拼 "data/STOP"；worker 只读标记，不写、不删。
     routes_commands_py = read(os.path.join(ROOT, "app", "api", "routes_commands.py"))

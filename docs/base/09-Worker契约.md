@@ -164,3 +164,17 @@ POST /api/messages                                    # 报活 / 交活 / 报做
 被驳回后 Master 可以重派同一 task_id（Batch9 起「验收驳回」可直接重派），`remaining_retry` 在驳回当时已减 1，重派不再重复扣；扣到 0 后任务转「执行失败」，不能再派。你不需要自己管次数，但要保证**重派时能接着做**（幂等：别把上一次的半成品重复叠加）。
 
 `remaining_retry` 扣到 0 后不会变负数，也不会再允许派发。
+## 八、岗位与实例级路由（Batch31-D 起）
+
+Worker 从「一台机器一个身份」升级成「一台机器可以挂多个岗位，派单能派到岗位」。
+
+| 事项 | 约定 |
+|---|---|
+| 岗位名 | `--instance-id <角色-主机>`，例如 `qa-mac`、`ops-mac`、`ops-win`；不传则回落主机名（老行为） |
+| 任务上的两个字段 | `target_instance`（派给谁）、`done_instance`（谁干的，回执时由平台按实例填）；两者都在 `TaskView` 里能看 |
+| 平台侧过滤 | `GET /api/tasks?instance_id=ops-win` 只看该岗位的活；`?include_all=true` 看全部 |
+| **不传 instance 时的可见范围** | 只看到「未指定岗位」的活（`target_instance` 为空）。这是 **有意隔离**，不是漏洞：老 Worker 不知道岗位概念，让它去抢定向单会派错人 |
+| 老 Worker 兼容策略（2026-11-21 决策） | **保持现状，不做自动补派、不做后台改写**。理由：定向单必须由登记过的岗位接（未登记 `worker_registered` 时平台直接 409 拒派），老 Worker 只能领「未指定岗位」的活；这条边界由平台在派单前就挡住，不需要 Worker 侧改造。真要收编老机器，走一次 `deploy\install-windows-tasks.ps1 -OnlyBat -InstanceId <名> -UseWorkerToken` 重生成启动脚本即可 |
+| 未升级的代价（如实记） | 老 Worker 的「累计完成」恒为 0（没有 `done_instance` 就计不进台账口径），看板上会显示成静默或 0，容易被误读成「没干活」；因此收编一台机器时应当同时做三件事：改岗位名、换口令档、重启单进程 |
+
+Windows 那台的收编记录在 `15-岗位与权限.md` 十一·四。

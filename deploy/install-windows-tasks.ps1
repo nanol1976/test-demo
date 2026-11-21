@@ -26,6 +26,9 @@ param(
     [switch]$DryRun,
     [string]$Repo = "",
     [string]$WorkerId = "workbuddy",
+    [string]$InstanceId = "",
+    [switch]$UseWorkerToken,
+    [switch]$OnlyBat,
     [int]$Concurrency = 2,
     [int]$Port = 8000,
     [string]$Token = ""
@@ -86,17 +89,20 @@ if (-not $DryRun) {
 # ---------- 0) 鉴权 token：没显式给就从仓库 .env 里取（Batch27） ----------
 # 平台一开 API_TOKEN，Worker 不带同一个就会被 401 打回；token 不写进命令行以外的地方，
 # 也不打印到控制台（避免日志里留明文）。
+# Batch31-E：-UseWorkerToken 时改取执行方口令（只能注册/心跳/回执，投不出派单），
+# 让「既当经理又当工人」的那台机器退回纯执行档。
+$TokenKey = if ($UseWorkerToken) { "API_TOKEN_WORKER" } else { "API_TOKEN" }
 if ([string]::IsNullOrWhiteSpace($Token)) {
     $EnvFile = Join-Path $Repo ".env"
     if (Test-Path -LiteralPath $EnvFile) {
         foreach ($line in (Get-Content -LiteralPath $EnvFile -Encoding UTF8)) {
-            if ($line -match '^\s*API_TOKEN\s*=\s*(.+?)\s*$') {
+            if ($line -match ('^\s*' + $TokenKey + '\s*=\s*(.+?)\s*$')) {
                 $Token = $Matches[1].Trim().Trim('"').Trim("'")
             }
         }
     }
 }
-if ($Token -ne "") { Say "已从 .env 取到 API_TOKEN（长度 $($Token.Length)，不打印内容）" }
+if ($Token -ne "") { Say "已从 .env 取到 $TokenKey（长度 $($Token.Length)，不打印内容）" }
 
 # ---------- 1) 生成 worker-run.bat ----------
 $ArgList = @(
@@ -111,6 +117,7 @@ $ArgList = @(
     "--allow-root", "`"$Repo`"",
     "--work-dir", "`"$Repo`""
 )
+if (-not [string]::IsNullOrWhiteSpace($InstanceId)) { $ArgList += @("--instance-id", $InstanceId) }
 if ($Token -ne "") { $ArgList += @("--token", $Token) }
 
 $BatLines = @(
@@ -128,6 +135,12 @@ if ($DryRun) {
 } else {
     [System.IO.File]::WriteAllLines($Bat, $BatLines, (New-Object System.Text.UTF8Encoding($false)))
     Say "已生成：$Bat"
+}
+
+# Batch31-E：只重生成 bat、不碰计划任务（换口令/换岗位名时用，避免把平台和守护一起重启）
+if ($OnlyBat) {
+    Say "（-OnlyBat：已跳过任务注册，改完请手动重启 MW-Worker 让新参数生效）"
+    return
 }
 
 # ---------- 2) 注册四个任务 ----------
