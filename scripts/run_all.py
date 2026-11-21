@@ -51,6 +51,7 @@ SCRIPTS = [
     ("Batch32-1 异构复核：派生/逐项/闸门/只写一次", "verify_b32.py"),
     ("Batch32-2A 插件沉淀：目录规范/元数据/版本递增/授权字段", "verify_b32_2a.py"),
     ("Batch32-2B 插件授权：实例>岗位>撤权 + 拒单审计", "verify_b32_2b.py"),
+    ("Batch33 dsh 适配层：patch/key/env/退出码", "verify_b33.py"),
 ]
 
 

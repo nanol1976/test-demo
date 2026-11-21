@@ -64,6 +64,29 @@ POST /api/messages                                    # 报活 / 交活 / 报做
 
 安全边界（参考实现强制）：只跑白名单目录内的 `.py`、拒绝 `..` 越界、拒绝拼 shell、单任务硬超时。
 
+### 一·补三 `exec.adapter`：交给外部 agent 干（Batch33）
+
+前一种规格是「跑一个脚本」。要交给 dsh（DeepSeek Harness）这类外部 agent 干时，`exec` 换成长这样——**不需要 `script`，也不需要 `args`**，`payload.task_goal` 就是喂给它的那句话：
+
+```json
+"exec": { "adapter": "dsh", "timeout_seconds": 120 }
+```
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `adapter` | string | 必填，目前只认 `dsh`；写别的值 → `task_reject`「不认识的 adapter：…」 |
+| `timeout_seconds` | number | 可选，同样只能比 Worker 全局上限更短 |
+| `script` / `args` | — | adapter 单里不填；填了也不看 |
+
+执行语义（`worker/dsh_adapter.py`）：
+
+- 命令固定是 `dsh --profile headless --patch <仓库内 worker/dsh/nvidia-patch.yml> "<task_goal>"`。headless profile 自身是空 patch，所以每次都用 `--patch` 临时叠上英伟达路由，**不改用户自己的 `~/.dsh` 配置**。
+- key 从 `~/.dsh/.credentials.yaml` 的 `refs.NVIDIA_API_KEY` 读出（`MWP_DSH_CREDENTIALS` 可指向别处），**只塞进子进程 env**，不落仓库、不进台账。找不到 key → 直接拒单，理由写明找的是哪一段。
+- 判定只看退出码：`0` 即成功，**stdout 就是产出**（进回执 `logs`），非零即拒单并把 stderr（或 stdout 末 400 字）带进理由。
+- 注意 dsh 的推理过程写在 **stderr**（前缀 `dsh: reasoning:`），答案才在 stdout，所以 `logs` 只取 stdout 是对的，stderr 留给拒单理由。
+- 回执 `payload.output` 带 `{adapter, exit_code, duration_ms, model}`，方便一眼看出这单是谁跑的、跑了多久、用的哪个模型。
+- 已知：dsh 是完整 agent，会自己去读目录里的文件，耗时可能远超单纯问答（实测一次 3+3 让它读了仓库，95s、18 次心跳）。要它「只回答、别用工具」得在 `task_goal` 里写清楚。
+
 ## 二、报文格式（与 Master 同协议）
 
 ```json

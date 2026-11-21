@@ -904,6 +904,35 @@ def stage_static():
           "附3：时间字段的口径" in read(os.path.join(ROOT, "docs", "base", "07-台账两表字段.md")),
           "口径只活在代码里")
 
+    # 1.8m Batch33：dsh 编队——外部 agent 走适配层，不动用户自己的 ~/.dsh。
+    # 红线守的是「方向」：patch 在仓库里、key 只进子进程 env、adapter 分支排在建命令之前。
+    dsh_adapter_py = read(os.path.join(ROOT, "worker", "dsh_adapter.py"))
+    dsh_patch = read(os.path.join(ROOT, "worker", "dsh", "nvidia-patch.yml"))
+    worker_py33 = read(os.path.join(ROOT, "worker", "agent_worker.py"))
+    check("Batch33 nvidia patch 在仓库内且指向 NVIDIA 端点",
+          "https://integrate.api.nvidia.com/v1" in dsh_patch
+          and "apiKeyEnv: NVIDIA_API_KEY" in dsh_patch
+          and "nemotron-3.5-lightning-30b-a3b" in dsh_patch,
+          "patch 丢了：dsh headless 会退回 DeepSeek 路由")
+    check("Batch33 命令固定叠 --profile headless + --patch",
+          '"--profile"' in dsh_adapter_py and '"headless"' in dsh_adapter_py
+          and '"--patch"' in dsh_adapter_py,
+          "命令形状被改了，patch 就不生效")
+    check("Batch33 key 只进子进程 env，不进仓库文件",
+          'env["NVIDIA_API_KEY"] = key' in dsh_adapter_py
+          and ("nvapi" + "-") not in dsh_adapter_py
+          and ("nvapi" + "-") not in dsh_patch,
+          "key 被硬编码或没塞进 env")
+    check("Batch33 先判 adapter 再解析 script（顺序不许倒）",
+          worker_py33.index('spec.get("adapter")') < worker_py33.index("resolve_script(spec.get"),
+          "adapter 单会被当成 script 单拒掉")
+    check("Batch33 只认 dsh，退出码说了算",
+          "不认识的 adapter" in worker_py33 and 'f"dsh 退出码 {result' in worker_py33,
+          "adapter 白名单或失败判据被放宽了")
+    check("Batch33 exec.adapter 写进 09 号契约（载荷形状不靠口口相传）",
+          "exec.adapter" in read(os.path.join(ROOT, "docs", "base", "09-Worker契约.md")),
+          "契约文档没写 adapter 单的形状")
+
     # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
 
     # 不许各处自己拼 "data/STOP"；worker 只读标记，不写、不删。

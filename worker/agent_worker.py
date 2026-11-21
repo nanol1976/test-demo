@@ -39,6 +39,13 @@ from datetime import datetime, timezone
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
 
+# Batch33：DSH 适配层与本文件同目录，脚本方式启动时 sys.path[0] 就是 worker/；
+# 被测试按包导入时补一次，避免 import 失败。
+_WORKER_DIR = os.path.dirname(os.path.abspath(__file__))
+if _WORKER_DIR not in sys.path:
+    sys.path.insert(0, _WORKER_DIR)
+import dsh_adapter  # noqa: E402  （适配层：起 dsh headless，不改 DSH 配置）
+
 HARD_MAX_CONCURRENCY = 64  # 并发硬上限：注册表 / API / 线程池共用一个口径
 ALLOWED_SENDERS = ("master", "dsh", "workbuddy", "codex", "user")
 ACTIVE_STATUS = "执行中"
@@ -387,6 +394,12 @@ class WorkerAgent:
         spec = payload.get("exec") if isinstance(payload, dict) else None
         log("pick_task", task_id=task_id, trace_id=trace_id, task_goal=payload.get("task_goal"))
 
+        # Batch33：exec 里写了 adapter 就走适配层（目前只有 dsh）。它不需要 script/args，
+        # 一次子进程、一次退出码、一段 stdout；执行器换人不动 Worker 内核。
+        if isinstance(spec, dict) and spec.get("adapter"):
+            self._handle_adapter(trace_id, task_id, payload, spec)
+            return
+
         if not isinstance(spec, dict):
             self._reject(trace_id, task_id, "exec 规格缺失：payload.exec 不存在或不是对象，Worker 不知道该执行什么")
             return
@@ -444,6 +457,58 @@ class WorkerAgent:
             "metadata": {
                 "self_check": "脚本正常退出（退出码 0）；产出路径已核验存在" if artifacts else "脚本正常退出（退出码 0）",
                 "known_issues": "" if artifacts else "未声明 artifacts，产出未做存在性核验",
+                "heartbeats": hb.sent,
+                "worker_id": self.worker_id,
+                "instance_id": self.instance_id,
+                "finished_at": now_iso(),
+            },
+        })
+
+    def _handle_adapter(self, trace_id: str, task_id: str, payload: dict, spec: dict) -> None:
+        """Batch33：适配层执行（adapter=dsh）。stdout 当 logs，退出码当 exit_code。
+
+        不做的事：不改 DSH 自己的 profile、不把 key 落盘、不把 key 写进日志。
+        """
+        name = str(spec.get("adapter") or "").strip().lower()
+        if name != "dsh":
+            self._reject(trace_id, task_id, f"不认识的 adapter：{name!r}（目前只支持 dsh）")
+            return
+        goal = payload.get("task_goal") or ""
+        if not str(goal).strip():
+            self._reject(trace_id, task_id, "adapter=dsh 需要 payload.task_goal（不能为空）")
+            return
+        timeout = float(spec.get("timeout_seconds") or self.max_task_seconds)
+        timeout = min(timeout, self.max_task_seconds)
+        log("adapter_start", task_id=task_id, adapter=name, timeout_s=timeout)
+        hb = Heartbeat(self.client, trace_id, task_id, self.worker_id,
+                       self.heartbeat_interval, "dsh headless 执行中")
+        hb.start()
+        try:
+            result = dsh_adapter.run(str(goal), timeout=timeout, cwd=self.work_dir)
+        except dsh_adapter.DshError as exc:
+            self._reject(trace_id, task_id, f"adapter=dsh 起不来：{exc}")
+            return
+        finally:
+            hb.stop()
+
+        log("adapter_end", task_id=task_id, adapter=name,
+            exit_code=result["exit_code"], duration_ms=result["duration_ms"])
+        if result["exit_code"] != 0:
+            tail = (result["stderr"] or result["stdout"])[-400:]
+            self._reject(trace_id, task_id,
+                         f"dsh 退出码 {result['exit_code']}：{tail or '（无输出）'}")
+            return
+        self._return(trace_id, task_id, {
+            "output": {
+                "adapter": "dsh",
+                "exit_code": result["exit_code"],
+                "duration_ms": result["duration_ms"],
+                "model": result["model"],
+            },
+            "logs": result["stdout"][-2000:],
+            "metadata": {
+                "self_check": "dsh headless 正常退出（退出码 0）；stdout 即产出",
+                "known_issues": "",
                 "heartbeats": hb.sent,
                 "worker_id": self.worker_id,
                 "instance_id": self.instance_id,
