@@ -782,7 +782,10 @@ function renderRegistry(workers) {
     quotaCell.appendChild(input);
     quotaCell.appendChild(btn);
     tr.appendChild(quotaCell);
-    tr.appendChild(td(String(w.handled), "num"));
+    // Batch31-E：这里显示台账口径的累计完成（按「验收通过」计），不是 Worker 自报的进程内计数
+    const doneCell = td(String(w.completed_total == null ? 0 : w.completed_total), "num");
+    doneCell.title = `台账口径：验收通过 ${w.completed_total || 0} 条；本进程自报 ${w.handled || 0} 条`;
+    tr.appendChild(doneCell);
     // Batch26：最近上报给"N 前"，超过心跳超时直接红字（比一串时钟时间好读）
     const hbCell = document.createElement("td");
     hbCell.appendChild(heartbeatNode(w, Date.now()));
@@ -1203,7 +1206,7 @@ function snapshotHtml() {
     return "<tr>" + `<td class="mono">${esc(w.worker_id)}</td><td class="mono">${esc(w.instance_id || "default")}</td>`
       + `<td>${esc(workerRegistryState(w).label)}</td>`
       + `<td class="num">${esc(w.in_flight)}/${esc(w.concurrency)}</td>`
-      + `<td class="num">${esc(w.handled)}</td>`
+      + `<td class="num">${esc(w.completed_total == null ? 0 : w.completed_total)}</td>`
       + `<td class="${late ? "late" : ""}">${esc(fmtAgo(age))}</td></tr>`;
   }).join("");
 

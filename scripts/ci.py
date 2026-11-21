@@ -13,6 +13,7 @@
 退出码：0 全绿 / 1 有失败。
 """
 import importlib.util
+import json
 import os
 import py_compile
 import re
@@ -293,6 +294,36 @@ def stage_static():
           '"instance_id": self.instance_id' in worker_py)
     check("重派同一 task_id 不会被本地 done 挡掉（按 dispatch_time 认新一轮）",
           "redispatch_accept" in worker_py and "dispatch_seen" in worker_py)
+
+    # 1.5b5 Batch31-E：「累计完成」改台账口径 + 五业务方向验收探针
+    # 口径红线守三件事：① 后端有 _completed_counts 且按「验收通过」统计（不是进程内 handled）；
+    # ② 看板那一列绑 completed_total 而不是 handled；③ 五条业务线有可执行的探针，且门禁真跑一遍。
+    workers_txt = read(os.path.join(ROOT, "app", "api", "routes_workers.py"))
+    check("累计完成有台账口径实现（_completed_counts，按验收通过计）",
+          "def _completed_counts" in workers_txt and 'TaskLedger.status == "验收通过"' in workers_txt
+          and "done_instance.isnot(None)" in workers_txt)
+    check("执行方视图暴露 completed_total（并保留 handled 说明进程内计数）",
+          "completed_total: int = 0" in workers_txt and "handled: int" in workers_txt)
+    js_b31e = read(os.path.join(ROOT, "app", "static", "app.js"))
+    check("看板「累计完成」列绑 completed_total 不再绑 handled",
+          "w.completed_total" in js_b31e and "String(w.handled)" not in js_b31e)
+    probes_path = os.path.join(ROOT, "scripts", "role_probes.py")
+    check("五业务方向探针脚本在位", os.path.exists(probes_path))
+    if os.path.exists(probes_path):
+        ptxt = read(probes_path)
+        roles = ["probe_stock", "probe_doc", "probe_media", "probe_social", "probe_dev"]
+        check("探针覆盖五条业务线", all(f"def {r}(" in ptxt for r in roles),
+              "缺 " + ",".join(r for r in roles if f"def {r}(" not in ptxt))
+        rp = subprocess.run([PY, os.path.join("scripts", "role_probes.py"), "--role", "all", "--json"],
+                            cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=180)
+        ok_roles, detail_roles = False, ""
+        try:
+            payload = json.loads(rp.stdout or "{}")
+            ok_roles = bool(payload.get("ok")) and len(payload.get("results") or []) == 5
+            detail_roles = " / ".join(f"{r['role']}:{r['verdict']}" for r in payload.get("results") or [])
+        except ValueError:
+            detail_roles = (rp.stdout or rp.stderr or "")[:160]
+        check("五业务方向探针实跑全过（离线可判）", ok_roles, detail_roles)
 
     # 1.5b3 执行方在线视图红线（Batch12）：靠任务心跳推断，不新增接口
     model_py = read(os.path.join(ROOT, "app", "models", "__init__.py"))

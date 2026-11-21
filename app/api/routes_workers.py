@@ -14,14 +14,14 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.core.clock import ensure_utc
 from app.core.config import get_settings
 from app.core.security import require_token, require_worker_write
-from app.models import WorkerRegistry
+from app.models import TaskLedger, WorkerRegistry
 
 router = APIRouter(dependencies=[Depends(require_token)])
 
@@ -55,14 +55,32 @@ class WorkerView(BaseModel):
     concurrency: int
     limit: int
     in_flight: int
+    # handled = Worker 自报的「本进程完成数」，进程一重启就归零（Batch13 的老口径）
     handled: int
+    # Batch31-E：台账口径的「累计完成」——按 done_instance 统计状态为「验收通过」的任务，
+    # 跨重启不归零，也不信 Worker 自报。看板上的「累计完成」绑这个。
+    completed_total: int = 0
     # Batch15：平台下发的期望并发上限（0 = 未下发，Worker 按自己 --concurrency 跑）
     desired_limit: int = 0
     note: Optional[str] = None
     meta: Optional[dict] = None
 
 
-def _view(row: WorkerRegistry, now: datetime, timeout: int) -> WorkerView:
+def _completed_counts(db: Session) -> dict:
+    """Batch31-E：台账口径的累计完成——按 done_instance 统计「验收通过」的任务。
+
+    为什么不用 Worker 自报的 handled：那是进程内计数，重启即归零，字面却叫「累计」。
+    台账是唯一真相：谁交的活、验收有没有过，都在 task_ledger 里。
+    """
+    rows = db.execute(
+        select(TaskLedger.done_instance, func.count())
+        .where(TaskLedger.status == "验收通过", TaskLedger.done_instance.isnot(None))
+        .group_by(TaskLedger.done_instance)
+    ).all()
+    return {inst: int(cnt) for inst, cnt in rows if inst}
+
+
+def _view(row: WorkerRegistry, now: datetime, timeout: int, completed: int = 0) -> WorkerView:
     last_seen = ensure_utc(row.last_seen)
     age = max(0.0, (now - last_seen).total_seconds())
     online = row.status == "running" and age <= timeout
@@ -82,6 +100,7 @@ def _view(row: WorkerRegistry, now: datetime, timeout: int) -> WorkerView:
         limit=row.limit,
         in_flight=row.in_flight,
         handled=row.handled,
+        completed_total=completed,
         desired_limit=row.desired_limit,
         note=row.note,
         meta=meta,
@@ -130,7 +149,8 @@ def report_worker(beat: WorkerBeat, db: Session = Depends(get_db),
         row.meta = json.dumps(beat.meta, ensure_ascii=False) if beat.meta else None
     db.commit()
     db.refresh(row)
-    return _view(row, now, get_settings().heartbeat_timeout_seconds)
+    completed = _completed_counts(db).get(row.instance_id, 0)
+    return _view(row, now, get_settings().heartbeat_timeout_seconds, completed)
 
 
 @router.get("/api/workers", response_model=List[WorkerView])
@@ -147,7 +167,8 @@ def list_workers(online: bool = False, worker_id: Optional[str] = None,
     if worker_id:
         stmt = stmt.where(WorkerRegistry.worker_id == worker_id)
     rows = db.execute(stmt.order_by(WorkerRegistry.last_seen.desc())).scalars().all()
-    views = [_view(r, now, timeout) for r in rows]
+    counts = _completed_counts(db)
+    views = [_view(r, now, timeout, counts.get(r.instance_id, 0)) for r in rows]
     if online:
         views = [v for v in views if v.online]
     return views
