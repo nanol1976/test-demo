@@ -373,3 +373,21 @@ textarea {
   padding: 8px 2px 0; border-top: 1px solid var(--rule-2);
   margin-top: 2px; max-width: 74ch;
 }
+
+/* Batch31：岗位方章。与状态章（.tag）分工不同 —— 状态用描边字表示「活着没」，
+   岗位用浅底细框表示「在哪个部门」。两者不抢颜色，一眼能分开。 */
+.role-chip {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px 2px;
+  font-size: 11px;
+  line-height: 1.5;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: var(--pan-2);
+  color: var(--ink-2);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.role-chip.role-qa   { border-color: var(--stamp); color: var(--stamp); }
+.role-chip.role-mgmt { border-color: var(--ink); color: var(--ink); }

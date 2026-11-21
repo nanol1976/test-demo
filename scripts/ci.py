@@ -36,6 +36,8 @@ if ROOT not in sys.path:
 # Batch28：只读口令也是鉴权开关，一起清空——只清全权那一枚的话，无口令请求会变 401。
 os.environ["API_TOKEN"] = ""
 os.environ["API_TOKEN_READONLY"] = ""
+# Batch31：执行方口令也是鉴权开关，不清空同一批冒烟会从 401 变 403（方向被拒）
+os.environ["API_TOKEN_WORKER"] = ""
 
 FAILS = []
 
@@ -254,6 +256,21 @@ def stage_static():
             if needle not in text:
                 missing_tpl.append(f"{rel}:{needle}")
     check("三平台守护模板齐全且关键字段在", not missing_tpl, "; ".join(missing_tpl[:4]))
+
+    # 1.5b2b Batch31：Mac 双岗位常驻 —— 一个岗位一个 plist，口令不进 plist。
+    # 红线守两件事：① 安装脚本真的按岗位循环生成（不是手工写死一个）；
+    # ② plist 生成处不许出现 token 字面量，口令只能从 ~/.mwp/worker.env 读。
+    mac_install_py = read(os.path.join(ROOT, "deploy", "install-mac-workers.sh"))
+    mac_wrapper_py = read(os.path.join(ROOT, "deploy", "run-mw-worker.sh"))
+    check("Batch31 Mac 安装脚本按岗位循环生成 plist",
+          "for inst in $INSTANCES" in mac_install_py and "launchctl bootstrap" in mac_install_py)
+    check("Batch31 Mac plist 口令不进文件（只传岗位名）",
+          "MWP_TOKEN_WORKER" not in mac_install_py.split("<plist", 1)[-1],
+          "plist 生成段里出现了口令变量")
+    check("Batch31 Mac 启动器口令从 env 文件读且必须非空",
+          'MWP_TOKEN_WORKER:?' in mac_wrapper_py and ". \"$CONF\"" in mac_wrapper_py)
+    check("Batch31 质检岗默认只碰 scripts（岗位即权限边界）",
+          '"$ROLE" = "qa"' in mac_wrapper_py and "scripts" in mac_wrapper_py)
 
     # 1.5b3 执行方在线视图红线（Batch12）：靠任务心跳推断，不新增接口
     model_py = read(os.path.join(ROOT, "app", "models", "__init__.py"))
@@ -504,9 +521,10 @@ def stage_static():
                            ("routes_commands.py", "routes_messages.py", "routes_workers.py"))
     check("Batch28 只读口令有配置项（api_token_readonly）", "api_token_readonly" in cfg_py)
     check("Batch28 有 require_write 依赖（只读→403）", "def require_write" in sec_py and "403" in sec_py)
-    check("Batch28 三条写接口都挂了 require_write",
-          write_routes.count("Depends(require_write)") == 3,
-          f"{write_routes.count('Depends(require_write)')} 处")
+    check("Batch28 三条写接口都挂了 require_write／执行方档（Batch31 起 1 全权 + 2 执行方）",
+          write_routes.count("Depends(require_write)") == 1
+          and write_routes.count("Depends(require_worker_write)") == 2,
+          f"全权 {write_routes.count('Depends(require_write)')} 处 / 执行方 {write_routes.count('Depends(require_worker_write)')} 处")
     check("Batch28 权限档由中间件写进 X-API-Mode 头",
           "MODE_HEADER" in main_py and "middleware" in main_py)
     check("Batch28 看板能切只读态（读头 + 禁用写入口 + 只读章）",
@@ -524,6 +542,39 @@ def stage_static():
     check("Batch28 点「记住」后审计面板一起刷新（不再挂着旧 401）",
           "loadAudit()" in save_token_block,
           "saveToken 回调里没有 loadAudit()")
+
+    # 1.8b2 Batch31：执行方口令档——验收权与管理权必须是两把钥匙。
+    # 红线守的是「方向」：执行方档能写回执，但一个管理报文也投不出去，一条指令也下不了。
+    check("Batch31 执行方口令有配置项（api_token_worker）", "api_token_worker" in cfg_py)
+    check("Batch31 执行方档参与 resolve_role（不只是配了变量）",
+          "ROLE_WORKER" in sec_py and "worker and hmac.compare_digest" in sec_py)
+    # 只看白名单定义块本身，不看注释：注释里为了解释「为什么不许派单」必然会提到 task_dispatch
+    wmt_block = sec_py.split("WORKER_MSG_TYPES = frozenset({", 1)[-1].split("})", 1)[0] \
+        if "WORKER_MSG_TYPES = frozenset({" in sec_py else ""
+    check("Batch31 回写报文白名单只含 4 类 worker→master",
+          all(t in wmt_block for t in ("task_heartbeat", "task_return", "task_reject", "task_abort"))
+          and "task_dispatch" not in wmt_block
+          and "human_confirm" not in wmt_block
+          and "task_summary" not in wmt_block,
+          f"白名单块：{wmt_block.strip()[:80]}")
+    check("Batch31 报文入口按角色收敛方向（执行方档投不出派单）",
+          "ROLE_WORKER and msg_type not in WORKER_MSG_TYPES" in
+          read(os.path.join(ROOT, "app", "api", "routes_messages.py")))
+    check("Batch31 管理指令仍只认全权（commands 没被降档）",
+          read(os.path.join(ROOT, "app", "api", "routes_commands.py")).count("Depends(require_write)") == 1)
+    check("Batch31 执行方口令进 .env 时独立成变量",
+          "API_TOKEN_WORKER" in inst2 or "API_TOKEN_WORKER" in sec_py,
+          "环境变量名没落地")
+    # 1.8b3 Batch31-B：岗位一眼可辨。角色从 instance_id 推导，不进协议、不加接口字段。
+    check("Batch31 看板按 instance_id 前缀推导岗位",
+          "WORKER_ROLES" in app_js and "function workerRole" in app_js
+          and "function workerInstanceCell" in app_js)
+    check("Batch31 执行方表用岗位格子渲染（不是裸文本）",
+          "workerInstanceCell(w)" in app_js)
+    check("Batch31 岗位方章有样式（与状态章分开）", ".role-chip" in css2)
+    check("Batch31 岗位映射覆盖六个业务岗 + 三管理岗",
+          all(r in app_js for r in ("stock", "doc", "viz", "news", "dev", "qa", "ops", "mgmt")),
+          "岗位集合不全")
 
     # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
     # 不许各处自己拼 "data/STOP"；worker 只读标记，不写、不删。

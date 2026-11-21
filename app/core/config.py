@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     # Batch28：只读口令。给手机／外发查看用，只能读台账，不能下发指令。
     # 留空 = 不启用只读档（配了这一枚就只认「全权」那一枚）。
     api_token_readonly: str = ""
+    # Batch31：执行方口令。给在编的执行岗／质检岗用：能注册、能心跳、能回执四类报文，
+    # 但下发不了 master:* 指令。留空 = 不启用执行方档（此时执行方只能用全权口令）。
+    api_token_worker: str = ""
     page_size_default: int = 20
     page_size_max: int = 100
     # Batch4：调度判定参数

@@ -181,8 +181,15 @@ def main() -> int:
         mainpy = open(os.path.join(ROOT, "app", "main.py"), encoding="utf-8").read()
         check("config 有 api_token_readonly", "api_token_readonly" in cfg)
         check("security 有 require_write", "def require_write" in sec)
-        check("三条写接口都挂了 require_write", routes.count("Depends(require_write)") == 3,
+        # Batch31：三条写接口分成了两档 —— 管理指令仍只认全权，注册与报文交给执行方档。
+        # 这条断言原来写死「三条都挂 require_write」，执行方档一落地就变红；
+        # 现在按「1 全权 + 2 执行方」验，比数数更能说明权限是分开的。
+        check("管理指令仍只认全权（1 处 require_write）",
+              routes.count("Depends(require_write)") == 1,
               str(routes.count("Depends(require_write)")))
+        check("注册与报文走执行方档（2 处 require_worker_write）",
+              routes.count("Depends(require_worker_write)") == 2,
+              str(routes.count("Depends(require_worker_write)")))
         check("响应头由中间件统一写", "MODE_HEADER" in mainpy and "middleware" in mainpy)
         check("看板认 X-API-Mode 并切只读态", "X-API-Mode" in appjs and "applyMode" in appjs)
         check("看板有只读章且会禁用写按钮", 'id="modeBadge"' in html and "WRITE_BTNS" in appjs)

@@ -18,7 +18,7 @@ from app.bus import BusBackpressureError, BusTimeoutError, MessageBus
 from app.bus.router import HandlerResult, Router, UnknownMsgTypeError, VALID_MSG_TYPES
 from app.core.clock import ensure_utc
 from app.core.logging import get_logger
-from app.core.security import require_token, require_write
+from app.core.security import ROLE_WORKER, WORKER_MSG_TYPES, require_token, require_worker_write
 from app.models import MessageArchive
 from app.repositories.ledger import LedgerRepository
 from app.schemas import Envelope
@@ -119,12 +119,24 @@ def _task_view(task) -> TaskView:
     responses={400: {"model": ErrorBody}, 409: {"model": ErrorBody}, 422: {"model": ErrorBody}},
 )
 def post_message(raw: Dict[str, Any] = Body(...),
-                 role: str = Depends(require_write)) -> MessageAccepted:
-    """收一条报文：入总线 → 路由 → 状态迁移 → 归档。"""
+                 role: str = Depends(require_worker_write)) -> MessageAccepted:
+    """收一条报文：入总线 → 路由 → 状态迁移 → 归档。
+
+    Batch31：依赖换成 `require_worker_write`，执行方口令可以回执；但方向要收紧 ——
+    执行方档只允许投 4 类 worker→master 的报文，派单／人工确认／汇总一律 403。
+    """
     msg_type = raw.get("msg_type")
     if msg_type not in VALID_MSG_TYPES:
         raise HTTPException(
             status_code=400, detail=f"未知 msg_type: {msg_type!r}（协议只接受 8 种）"
+        )
+    if role == ROLE_WORKER and msg_type not in WORKER_MSG_TYPES:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"执行方口令只能投回写报文（{sorted(WORKER_MSG_TYPES)}），收到 {msg_type!r}；"
+                "派单与管理类报文请用全权口令"
+            ),
         )
 
     try:

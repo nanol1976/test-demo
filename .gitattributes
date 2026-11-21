@@ -3,3 +3,6 @@
 *.vbs text eol=crlf
 *.ps1 text eol=crlf
 *.bat text eol=crlf
+
+# Batch31：Mac/CI 上的 shell 脚本必须是 LF —— CRLF 会让 bash 报 bad interpreter。
+*.sh text eol=lf

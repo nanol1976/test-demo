@@ -62,19 +62,22 @@ function el(id) { return document.getElementById(id); }
 const WRITE_BTNS = ["btnPause", "btnResume", "btnClearBreaker", "btnStop", "sendMsg"];
 
 function applyMode() {
+  // Batch31 三档口令：readonly 全禁写；worker（执行方）能注册和回执，但下发不了管理指令 ——
+  // 服务端对这两种口令都会 403，前端也不该给假按钮。
   const ro = state.mode === "readonly";
+  const noCmd = ro || state.mode === "worker";
   WRITE_BTNS.forEach((id) => {
     const node = el(id);
     if (!node) return;
-    node.disabled = ro;
-    if (ro) node.title = "只读口令不能下发指令";
+    node.disabled = noCmd;
+    if (noCmd) node.title = ro ? "只读口令不能下发指令" : "执行方口令不能下发管理指令";
   });
   const badge = el("modeBadge");
   if (badge) {
-    badge.hidden = !ro;
-    badge.textContent = ro ? "只读" : "";
+    badge.hidden = !noCmd;
+    badge.textContent = ro ? "只读" : (state.mode === "worker" ? "执行方" : "");
   }
-  document.body.classList.toggle("readonly-mode", ro);
+  document.body.classList.toggle("readonly-mode", noCmd);
 }
 
 function styleFor(value) {
@@ -88,6 +91,34 @@ function tag(value) {
   span.className = "tag " + styleFor(value);
   span.textContent = value;
   return span;
+}
+
+ /* Batch31：岗位一眼可辨。
+    实例名按「角色-主机」命名（qa-mac / dev-win / stock-mac），看板从前缀推导岗位挂方章。
+    为什么不把岗位写进 worker_id：worker_id 同时是报文协议的 sender 枚举（5 个值），
+    改它要动协议、归档和历史数据；岗位是编制概念，能稳定推导就不进协议。
+    也不新增接口字段：instance_id 已经带着岗位，前端推导即可，不给接口面加负担。
+    不在册的前缀一律显示「通用」，绝不猜 —— 猜错的岗位比没有岗位更糟。 */
+const WORKER_ROLES = {
+  mgmt: "管理", ops: "运维", qa: "质检", dev: "开发",
+  stock: "证券研究", doc: "文档", viz: "视觉", news: "新媒体",
+};
+function workerRole(instanceId) {
+  const head = String(instanceId || "").toLowerCase().split("-")[0];
+  return WORKER_ROLES[head] ? head : "";
+}
+function workerInstanceCell(w) {
+  const cell = document.createElement("td");
+  const role = workerRole(w.instance_id);
+  if (role) {
+    const chip = document.createElement("span");
+    chip.className = "role-chip role-" + role;
+    chip.textContent = WORKER_ROLES[role];
+    chip.title = "岗位：" + WORKER_ROLES[role] + "（实例命名规则：角色-主机）";
+    cell.appendChild(chip);
+  }
+  cell.appendChild(text(w.instance_id || "default", "mono"));
+  return cell;
 }
 
 function text(value, cls) {
@@ -710,7 +741,7 @@ function renderRegistry(workers) {
   shown.forEach((w) => {
     const tr = document.createElement("tr");
     tr.appendChild(td(w.worker_id, "mono"));
-    tr.appendChild(td(w.instance_id || "default", "mono"));
+    tr.appendChild(workerInstanceCell(w));
     const st = workerRegistryState(w);
     const stCell = document.createElement("td");
     const span = document.createElement("span");
