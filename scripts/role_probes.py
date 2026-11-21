@@ -357,11 +357,14 @@ def probe_social() -> Probe:
     p.expect("4 条同源链接归一后唯一 2 条", len(uniq) == 2, f"归一 {len(uniq)} 条")
 
     # 3) 发布时间必须带时区（无时区视为不合格）
+    # 注意：Python 3.9 的 fromisoformat 不认 "Z" 后缀，Mac 的 worker 就是 3.9，
+    # 所以先把 Z 归一成 +00:00 再判——否则规则本身在旧解释器上假失败。
     stamps = ["2026-11-21T09:30:00+08:00", "2026-11-21 09:30", "2026-11-21T01:30:00Z"]
     ok_ts = []
     for s in stamps:
+        s2 = s[:-1] + "+00:00" if s.endswith("Z") else s
         try:
-            ok_ts.append(bool(datetime.fromisoformat(s).tzinfo))
+            ok_ts.append(bool(datetime.fromisoformat(s2).tzinfo))
         except ValueError:
             ok_ts.append(False)
     p.expect("ISO8601 带时区才合格（3 条中 2 条）", sum(ok_ts) == 2, f"判定 {ok_ts}")
@@ -409,6 +412,9 @@ def probe_dev() -> Probe:
         from app.main import app  # noqa: WPS433
         paths = [x for x in app.openapi()["paths"] if not x.startswith("/static")]
         p.expect("接口路径数 = 11（未私自扩容）", len(paths) == 11, f"{len(paths)} 条：{sorted(paths)}")
+    except ImportError as e:
+        # 只装 worker 依赖的机器（Mac 那台）本就没有 fastapi —— 如实跳过，不算过也不算败
+        p.skip("接口路径数 = 11（未私自扩容）", f"本机未装平台依赖：{e}")
     except Exception as e:  # pragma: no cover
         p.bad("接口路径数 = 11（未私自扩容）", f"openapi 生成失败：{e}")
 
