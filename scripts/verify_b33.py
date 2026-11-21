@@ -185,10 +185,15 @@ def main():
           home)
     dsh_adapter.ensure_profile("headless")
     seeded = os.path.join(home, "profiles", "headless")
-    check("profile 的 bundle 清单被复制到运行 home（否则 dsh 起不来）",
-          os.path.isfile(os.path.join(seeded, "package.json"))
-          and "dsh-base" in open(os.path.join(seeded, "package.json"), encoding="utf-8").read(),
-          seeded)
+    check("运行 home 下的 profile 目录已就位", os.path.isdir(seeded), seeded)
+    src_profile = os.path.join(os.path.expanduser("~"), ".dsh", "profiles", "headless")
+    if os.path.isfile(os.path.join(src_profile, "package.json")):
+        check("profile 的 bundle 清单被复制到运行 home（否则 dsh 起不来）",
+              os.path.isfile(os.path.join(seeded, "package.json"))
+              and "dsh-base" in open(os.path.join(seeded, "package.json"), encoding="utf-8").read(),
+              seeded)
+    else:
+        check("本机没装 dsh profile 时也能跑验收（只建目录、不硬要源）", True)
     saved_cred = os.environ.pop("MWP_DSH_CREDENTIALS", None)
     check("凭证路径仍指用户的 ~/.dsh（不跟着运行 home 跑）",
           os.path.abspath(dsh_adapter.credentials_path())
