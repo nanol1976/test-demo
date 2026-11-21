@@ -517,6 +517,32 @@ def stage_static():
           "loadAudit()" in save_token_block,
           "saveToken 回调里没有 loadAudit()")
 
+    # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
+    # 不许各处自己拼 "data/STOP"；worker 只读标记，不写、不删。
+    routes_commands_py = read(os.path.join(ROOT, "app", "api", "routes_commands.py"))
+    stopflag_py = read(os.path.join(ROOT, "app", "core", "stopflag.py"))
+    worker_py29 = read(os.path.join(ROOT, "worker", "agent_worker.py"))
+    guide11 = read(os.path.join(ROOT, "docs", "base", "11-启动自检清单.md"))
+    check("Batch29 master:stop 在指令白名单",
+          '"master:stop"' in routes_commands_py
+          and "master:stop" in routes_commands_py.split("ALLOWED_COMMANDS", 1)[-1][:200],
+          "白名单里没有 master:stop")
+    check("Batch29 停止标记只有一个实现（stopflag 模块）",
+          "def request_stop" in stopflag_py and "def clear_stop" in stopflag_py
+          and "STOP_FILE_NAME" in stopflag_py,
+          "stopflag.py 不完整")
+    check("Batch29 标记路径可用环境变量覆盖（测试不许写真实 data/）",
+          "MWP_STOP_FILE" in stopflag_py and "MWP_STOP_FILE" in worker_py29,
+          "MWP_STOP_FILE 没接上")
+    check("Batch29 worker 认停止标记（只读不写）",
+          "def should_stop" in worker_py29 and "should_stop(" in worker_py29
+          and "stop_flag_seen" in worker_py29
+          and "os.remove(" not in worker_py29.split("def should_stop", 1)[-1][:200],
+          "worker 没轮询停止标记")
+    check("Batch29 优雅停止写进自检清单（N 节）",
+          "## N." in guide11 and "master:stop" in guide11,
+          "docs/base/11 没有 N 节")
+
     # 1.9 查询契约：关键字与排序走白名单（不许把 sort 直通给 SQL）
     queries_py = read(os.path.join(ROOT, "app", "api", "routes_queries.py"))
     ledger_py = read(os.path.join(ROOT, "app", "repositories", "ledger.py"))

@@ -53,6 +53,13 @@ def log(event: str, **fields) -> None:
     print(json.dumps({"ts": now_iso(), "event": event, **fields}, ensure_ascii=False), flush=True)
 
 
+def should_stop(stop_file: str) -> bool:
+    """Batch29：停止标记文件存在即该收尾退出。路径为空返回 False（未启用）。"""
+    if not stop_file:
+        return False
+    return os.path.exists(stop_file)
+
+
 class PlatformError(RuntimeError):
     pass
 
@@ -202,7 +209,7 @@ class WorkerAgent:
                  work_dir: str, heartbeat_interval: float, max_task_seconds: float,
                  state_file: str = "", concurrency: int = 1, status_file: str = "",
                  min_concurrency: int = 1, registry_interval: float = 15.0,
-                 register: bool = True, instance_id: str = ""):
+                 register: bool = True, instance_id: str = "", stop_file: str = ""):
         if worker_id not in ALLOWED_SENDERS:
             raise SystemExit(f"--worker-id 必须是 {ALLOWED_SENDERS} 之一（sender 就是执行方身份）")
         self.client = client
@@ -230,6 +237,9 @@ class WorkerAgent:
         self.done = self._load_state()
         # 优雅退出：收到 SIGTERM/SIGINT 后不再拉新活，等在跑的任务收尾再退
         self._stop_requested = threading.Event()
+        # Batch29：平台落的停止标记（默认 data/STOP）。worker 只读不写，
+        # 清标记由平台的 master:resume 负责。
+        self.stop_file = stop_file
 
     # ---- 本地去重（平台侧状态已收敛的任务不会再出现在「执行中」，这里只防同轮重复） ----
     def _load_state(self):
@@ -457,7 +467,7 @@ class WorkerAgent:
 
     def run(self, once: bool = False, poll_interval: float = 2.0,
             max_tasks: int = 0, idle_rounds_before_exit: int = 0,
-            grace_seconds: float = 30.0) -> int:
+            grace_seconds: float = 30.0, stop_file: str = "") -> int:
         handled = 0
         idle_rounds = 0
         backoff = 0
@@ -502,6 +512,13 @@ class WorkerAgent:
                 # 回收已完成的任务（腾出并发槽位）
                 for fut in [f for f in inflight if f.done()]:
                     inflight.pop(fut, None)
+
+                # Batch29：平台落的停止标记也算停止请求。见到就先记一笔，
+                # 随后走同一套 stopping 收尾分支（不另写退出逻辑）。
+                flag = stop_file or self.stop_file
+                if flag and should_stop(flag):
+                    log("stop_flag_seen", stop_file=flag)
+                    self.stop()
 
                 stopping = self._stop_requested.is_set()
                 if stopping:
@@ -614,6 +631,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="多实例标识（Batch14），默认取主机名；一台机跑多个 Worker 时各自指定")
     p.add_argument("--no-register", action="store_true",
                    help="不上报注册表（平台没有 /api/workers 或不想被记录时用）")
+    # Batch29：优雅停止标记。平台下发 master:stop 会写这个文件，worker 见到就收尾退出。
+    # 环境变量 MWP_STOP_FILE 优先，便于测试隔离（不写真实 data/STOP）。
+    p.add_argument("--stop-file", default=os.environ.get("MWP_STOP_FILE", "data/STOP"),
+                   help="停止标记文件路径（默认 data/STOP，可由 MWP_STOP_FILE 覆盖）")
     return p
 
 
@@ -634,13 +655,15 @@ def main(argv=None) -> int:
         registry_interval=args.registry_interval,
         register=not args.no_register,
         instance_id=args.instance_id,
+        stop_file=args.stop_file,
     )
     log("worker_start", worker_id=args.worker_id, base_url=args.base_url,
-        allow_roots=allow_roots, work_dir=args.work_dir)
+        allow_roots=allow_roots, work_dir=args.work_dir, stop_file=args.stop_file)
     return agent.run(once=args.once, poll_interval=args.poll_interval,
                      max_tasks=args.max_tasks,
                      idle_rounds_before_exit=args.idle_exit_rounds,
-                     grace_seconds=args.grace_seconds)
+                     grace_seconds=args.grace_seconds,
+                     stop_file=args.stop_file)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@
 - master:resume         恢复该 trace（并复位熔断）
 - master:clear-breaker  仅复位熔断标志，不改暂停状态
 - master:worker-limit   给某个执行方实例下发期望并发上限（Batch15）
+- master:stop           落「优雅停止」标记，worker 收尾退出（Batch29；master:resume 会清标记）
 
 Batch18：四条指令**全部**落审计（`worker_quota_audit`，append-only）。
 暂停/恢复/复位熔断这三条是流水线级的，没有"实例"这个概念，审计里用
@@ -29,6 +30,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.core.logging import get_logger
 from app.core.security import require_token, require_write
+from app.core.stopflag import clear_stop, request_stop
 from app.models import WorkerQuotaAudit, WorkerRegistry
 from app.repositories.ledger import LedgerRepository
 from app.services.breaker import breaker
@@ -37,13 +39,14 @@ logger = get_logger(__name__)
 
 router = APIRouter(dependencies=[Depends(require_token)])
 
-ALLOWED_COMMANDS = {"master:pause", "master:resume", "master:clear-breaker", "master:worker-limit"}
+ALLOWED_COMMANDS = {"master:pause", "master:resume", "master:clear-breaker",
+                    "master:worker-limit", "master:stop"}
 
 
 class CommandRequest(BaseModel):
-    command: str = Field(..., description="master:pause | master:resume | master:clear-breaker | master:worker-limit")
+    command: str = Field(..., description="master:pause | master:resume | master:clear-breaker | master:worker-limit | master:stop")
     trace_id: Optional[str] = Field(default=None, max_length=64,
-                                    description="流水线指令必填；master:worker-limit 可不填")
+                                    description="流水线指令必填；master:worker-limit / master:stop 可不填")
     # Batch15：实例级并发配额
     worker_id: Optional[str] = Field(default=None, max_length=64)
     instance_id: Optional[str] = Field(default=None, max_length=64)
@@ -61,17 +64,20 @@ class CommandResult(BaseModel):
     worker_id: Optional[str] = None
     instance_id: Optional[str] = None
     desired_limit: Optional[int] = None
+    # Batch29：是否已落下"优雅停止"标记
+    stopping: bool = False
 
 
 @router.post(
     "/commands",
     response_model=CommandResult,
-    summary="下发运维指令（暂停 / 恢复 / 复位熔断 / 实例并发配额）",
+    summary="下发运维指令（暂停 / 恢复 / 复位熔断 / 实例并发配额 / 优雅停止）",
     description=(
-        "只接受 master:pause、master:resume、master:clear-breaker、master:worker-limit 四条指令。"
+        "只接受 master:pause、master:resume、master:clear-breaker、master:worker-limit、master:stop 五条指令。"
         "暂停只会拦截该 trace 的后续派发，不改变任何任务的既有状态。"
         "master:worker-limit 只写注册表的 desired_limit，由 Worker 下次上报时自行生效，"
         "平台不会去杀在飞的任务。"
+        "master:stop 落一个停止标记文件（worker 下一轮轮询到即收尾退出），master:resume 会把它清掉。"
     ),
 )
 def post_command(payload: CommandRequest, db: Session = Depends(get_db),
@@ -82,6 +88,16 @@ def post_command(payload: CommandRequest, db: Session = Depends(get_db),
 
     if payload.command == "master:worker-limit":
         return _worker_limit(payload, db, operator)
+
+    # Batch29：优雅停止——落一个标记文件，worker 下一轮轮询到就收尾退出。
+    # 不需要 trace_id（这是整机级动作，不是某条流水线），也不改任何任务状态。
+    if payload.command == "master:stop":
+        path = request_stop(payload.reason or "")
+        _audit(db, command=payload.command, worker_id="master",
+               instance_id="data", reason=payload.reason, operator=operator)
+        db.commit()
+        logger.info("优雅停止标记已落盘：%s reason=%s", path, payload.reason)
+        return CommandResult(command=payload.command, stopping=True)
 
     if not payload.trace_id:
         raise HTTPException(status_code=422, detail=f"{payload.command} 必须带 trace_id")
@@ -95,6 +111,9 @@ def post_command(payload: CommandRequest, db: Session = Depends(get_db),
     elif payload.command == "master:resume":
         pipeline = repo.set_pause(payload.trace_id, False)
         breaker.reset(payload.trace_id)
+        # Batch29：resume 顺手把「优雅停止」标记清掉（幂等，本来没有也不报错），
+        # 这样一条 resume 就能同时恢复"停机"和"暂停派发"。
+        clear_stop()
     else:
         breaker.reset(payload.trace_id)
 
