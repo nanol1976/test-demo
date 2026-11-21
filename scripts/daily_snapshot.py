@@ -4,6 +4,8 @@
 只使用标准库，无第三方依赖。
 """
 
+from __future__ import annotations
+
 import argparse
 import html
 import json
