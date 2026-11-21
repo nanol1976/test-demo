@@ -933,6 +933,34 @@ def stage_static():
           "exec.adapter" in read(os.path.join(ROOT, "docs", "base", "09-Worker契约.md")),
           "契约文档没写 adapter 单的形状")
 
+    # 1.8n Batch33-1：模型按单指定——仓库 patch 是模板，不就地改；临时 patch 按模型缓存。
+    dsh_doc09 = read(os.path.join(ROOT, "docs", "base", "09-Worker契约.md"))
+    check("Batch33-1 模型名有白名单校验（拒 .. 与空格）",
+          "MODEL_RE" in dsh_adapter_py and "def check_model" in dsh_adapter_py
+          and '".." in value' in dsh_adapter_py,
+          "模型名没校验，会被拼进文件路径或 yml")
+    check("Batch33-1 仓库 patch 只当模板，渲染结果落 run/tmp_dsh",
+          "TMP_PATCH_ROOT" in dsh_adapter_py
+          and '"tmp_dsh"' in dsh_adapter_py
+          and "def resolve_patch" in dsh_adapter_py,
+          "按单模型改写仓库 patch 就回滚不掉了")
+    check("Batch33-1 优先级：按单 > MWP_DSH_MODEL > 默认",
+          "MWP_DSH_MODEL" in dsh_adapter_py and "def resolve_model" in dsh_adapter_py,
+          "环境变量没接进解析链")
+    check("Batch33-1 Worker 把按单 model 传进适配层",
+          'model=spec.get("model")' in worker_py33,
+          "exec.model 被吞掉了")
+    check("Batch33-1 exec.model 写进 09 号契约",
+          "exec.model" in dsh_doc09 and "MWP_DSH_MODEL" in dsh_doc09,
+          "契约没写 model 字段与优先级")
+    check("Batch33-1 dsh 运行 home 收进仓库（不许让 Worker 改用户 ~/.dsh）",
+          "RUNTIME_HOME" in dsh_adapter_py and '"dsh_home"' in dsh_adapter_py
+          and 'env["DSH_HOME"] = home' in dsh_adapter_py,
+          "DSH_HOME 还指着用户的 home，dsh 每次启动都会改写它")
+    check("Batch33-1 凭证仍只读用户 ~/.dsh（运行 home 不接管凭证）",
+          'os.path.join(user_dsh_home(), ".credentials.yaml")' in dsh_adapter_py,
+          "凭证被搬到运行 home 就等于把 key 复制进仓库")
+
     # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
 
     # 不许各处自己拼 "data/STOP"；worker 只读标记，不写、不删。

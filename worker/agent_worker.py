@@ -479,12 +479,14 @@ class WorkerAgent:
             return
         timeout = float(spec.get("timeout_seconds") or self.max_task_seconds)
         timeout = min(timeout, self.max_task_seconds)
-        log("adapter_start", task_id=task_id, adapter=name, timeout_s=timeout)
+        log("adapter_start", task_id=task_id, adapter=name, timeout_s=timeout,
+            model=spec.get("model") or None)
         hb = Heartbeat(self.client, trace_id, task_id, self.worker_id,
                        self.heartbeat_interval, "dsh headless 执行中")
         hb.start()
         try:
-            result = dsh_adapter.run(str(goal), timeout=timeout, cwd=self.work_dir)
+            result = dsh_adapter.run(str(goal), timeout=timeout, cwd=self.work_dir,
+                                     model=spec.get("model"))
         except dsh_adapter.DshError as exc:
             self._reject(trace_id, task_id, f"adapter=dsh 起不来：{exc}")
             return

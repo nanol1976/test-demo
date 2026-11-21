@@ -69,18 +69,23 @@ POST /api/messages                                    # 报活 / 交活 / 报做
 前一种规格是「跑一个脚本」。要交给 dsh（DeepSeek Harness）这类外部 agent 干时，`exec` 换成长这样——**不需要 `script`，也不需要 `args`**，`payload.task_goal` 就是喂给它的那句话：
 
 ```json
-"exec": { "adapter": "dsh", "timeout_seconds": 120 }
+"exec": { "adapter": "dsh", "timeout_seconds": 120, "model": "minimaxai/minimax-m3.1-flash" }
 ```
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `adapter` | string | 必填，目前只认 `dsh`；写别的值 → `task_reject`「不认识的 adapter：…」 |
 | `timeout_seconds` | number | 可选，同样只能比 Worker 全局上限更短 |
+| `model` | string | 可选，按单指定模型（Batch33-1）。不填就看环境变量 `MWP_DSH_MODEL`，再没有就用仓库 patch 里的默认 |
 | `script` / `args` | — | adapter 单里不填；填了也不看 |
+
+`model` 的取值顺序：**`exec.model` > `MWP_DSH_MODEL` > 仓库 patch 默认 `nvidia/nemotron-3.5-lightning-30b-a3b`**。名字只允许 `A-Za-z0-9._:@/-`，不许出现 `..` 或空格，否则整单直接拒（不合法就不跑，不猜）。
 
 执行语义（`worker/dsh_adapter.py`）：
 
-- 命令固定是 `dsh --profile headless --patch <仓库内 worker/dsh/nvidia-patch.yml> "<task_goal>"`。headless profile 自身是空 patch，所以每次都用 `--patch` 临时叠上英伟达路由，**不改用户自己的 `~/.dsh` 配置**。
+- 命令固定是 `dsh --profile headless --patch <patch 路径> "<task_goal>"`。headless profile 自身是空 patch，所以每次都用 `--patch` 临时叠上英伟达路由，**不改用户自己的 `~/.dsh` 配置**。
+- 运行 home 也收进仓库：Worker 给子进程设 `DSH_HOME=run/dsh_home`（`MWP_DSH_HOME` 可改），只把用户 `~/.dsh/profiles/headless` 里的四个小文件（`cordis.yml` / `cordis.patch.yml` / `package.json` / `pnpm-workspace.yaml`）复制过去，node_modules 不复制、bundle 仍用全局装的那份。原因：dsh 每次启动都会重写 `profiles/<name>/cordis.yml`，指着用户的 home 就等于让 Worker 改用户配置，而且很多机器禁止普通进程写用户目录，会直接 `EPERM` 起不来。凭证仍只从 `~/.dsh/.credentials.yaml` 读（只读，不复制）。临时目录（`TMP`/`TEMP`/`TMPDIR`）也指到 `run/tmp_dsh/temp`，免得插件写系统临时目录时被拦。
+- patch 路径怎么来：模型等于仓库默认时直接用 `worker/dsh/nvidia-patch.yml`；按单换成别的模型时，把这份 yml 当**模板**渲染（`models` 列表和 `agent-default-model` 两处一起换，`name:` 换成模型短名），写到 `run/tmp_dsh/patch-<模型名>.yml`。同一个模型只占一个文件、内容每次重写，**不删**（有些机器上删文件会被安全软件拦，删不干净还留垃圾）。仓库里那份永远不动。
 - key 从 `~/.dsh/.credentials.yaml` 的 `refs.NVIDIA_API_KEY` 读出（`MWP_DSH_CREDENTIALS` 可指向别处），**只塞进子进程 env**，不落仓库、不进台账。找不到 key → 直接拒单，理由写明找的是哪一段。
 - 判定只看退出码：`0` 即成功，**stdout 就是产出**（进回执 `logs`），非零即拒单并把 stderr（或 stdout 末 400 字）带进理由。
 - 注意 dsh 的推理过程写在 **stderr**（前缀 `dsh: reasoning:`），答案才在 stdout，所以 `logs` 只取 stdout 是对的，stderr 留给拒单理由。

@@ -121,6 +121,93 @@ def main():
     check("dsh 失败按退出码拒单（不当作成功）",
           'f"dsh 退出码 {result' in worker_src)
 
+    print("\n=== 10) 按单指定模型（Batch33-1） ===")
+    other_model = "minimaxai/minimax-m3.1-flash"
+    patch_other, generated = dsh_adapter.resolve_patch(other_model)
+    check("默认模型直接复用仓库 patch（不写临时文件）",
+          dsh_adapter.resolve_patch(dsh_adapter.DEFAULT_MODEL) == (patch, False))
+    check("自定义模型渲染出临时 patch", generated and os.path.isfile(patch_other)
+          and os.path.abspath(patch_other).startswith(os.path.abspath(dsh_adapter.TMP_PATCH_ROOT)))
+    body_other = open(patch_other, encoding="utf-8").read()
+    check("临时 patch 两处模型都换了（models 列表 + 默认模型）",
+          body_other.count(other_model) == 2
+          and dsh_adapter.DEFAULT_MODEL not in body_other,
+          f"count={body_other.count(other_model)}")
+    check("临时 patch 的 name 也跟着换成短名",
+          "name: minimax-m3.1-flash" in body_other)
+    check("仓库 patch 没被改写", open(patch, encoding="utf-8").read().count(dsh_adapter.DEFAULT_MODEL) == 2)
+    check("同一模型第二次解析复用同一份缓存",
+          dsh_adapter.resolve_patch(other_model)[0] == patch_other)
+
+    print("\n=== 11) 模型名不合法要被拒 ===")
+    bad_models = ["", "  ", "../etc/passwd", "nvidia/a b", "nvidia/../../x"]
+    bad_hits = []
+    for m in bad_models:
+        try:
+            dsh_adapter.check_model(m)
+            bad_hits.append(m or "空")
+        except dsh_adapter.DshError:
+            pass
+    check("空 / 越界 / 带空格 的模型名一律拒", not bad_hits, "、".join(bad_hits)[:80])
+
+    print("\n=== 12) run() 里模型真的进了命令，patch 落在缓存目录 ===")
+    stub_wrap = write(os.path.join(tmp, "stub_args.py"),
+                      "import sys\n"
+                      "args = sys.argv[1:]\n"
+                      "print('patch=' + args[args.index('--patch') + 1])\n"
+                      "print('3')\n")
+    os.environ["MWP_DSH_CMD"] = f'"{sys.executable}" {stub_wrap}' if os.name == "nt" else f"{sys.executable} {stub_wrap}"
+    os.environ["MWP_DSH_CREDENTIALS"] = good
+    before = set(os.listdir(dsh_adapter.TMP_PATCH_ROOT)) if os.path.isdir(dsh_adapter.TMP_PATCH_ROOT) else set()
+    res = dsh_adapter.run("1+1", timeout=30, model=other_model)
+    printed_patch = res["stdout"].splitlines()[0].split("=", 1)[1]
+    check("返回的 model 是按单指定的那个", res["model"] == other_model, res["model"])
+    check("命令里的 --patch 指向缓存 patch", os.path.abspath(printed_patch) == os.path.abspath(patch_other),
+          printed_patch)
+    after = set(os.listdir(dsh_adapter.TMP_PATCH_ROOT)) if os.path.isdir(dsh_adapter.TMP_PATCH_ROOT) else set()
+    check("跑一次只多不改（同一模型不新增文件）", after == before,
+          "、".join(sorted(after - before)) or "没有新增")
+
+    print("\n=== 13) MWP_DSH_MODEL 是真开关 ===")
+    os.environ["MWP_DSH_MODEL"] = "nvidia/llama-3.1-nemotron-70b-instruct"
+    res = dsh_adapter.run("1+1", timeout=30)
+    check("没给 model 时环境变量生效", res["model"] == "nvidia/llama-3.1-nemotron-70b-instruct", res["model"])
+    check("环境变量也走临时 patch", "tmp_dsh" in res["stdout"].splitlines()[0], res["stdout"][:60])
+    check("按单 model 优先级高于环境变量",
+          dsh_adapter.resolve_model(other_model) == other_model)
+    del os.environ["MWP_DSH_MODEL"]
+    check("清掉环境变量回落到默认",
+          dsh_adapter.resolve_model(None) == dsh_adapter.DEFAULT_MODEL)
+
+    print("\n=== 14) dsh 的运行 home 收进仓库，不动用户 ~/.dsh ===")
+    home = dsh_adapter.dsh_home()
+    check("运行 home 默认在仓库 run/dsh_home", os.path.abspath(home) == os.path.abspath(dsh_adapter.RUNTIME_HOME),
+          home)
+    dsh_adapter.ensure_profile("headless")
+    seeded = os.path.join(home, "profiles", "headless")
+    check("profile 的 bundle 清单被复制到运行 home（否则 dsh 起不来）",
+          os.path.isfile(os.path.join(seeded, "package.json"))
+          and "dsh-base" in open(os.path.join(seeded, "package.json"), encoding="utf-8").read(),
+          seeded)
+    saved_cred = os.environ.pop("MWP_DSH_CREDENTIALS", None)
+    check("凭证路径仍指用户的 ~/.dsh（不跟着运行 home 跑）",
+          os.path.abspath(dsh_adapter.credentials_path())
+          == os.path.abspath(os.path.join(os.path.expanduser("~"), ".dsh", ".credentials.yaml")),
+          dsh_adapter.credentials_path())
+    if saved_cred is not None:
+        os.environ["MWP_DSH_CREDENTIALS"] = saved_cred
+    stub_env = write(os.path.join(tmp, "stub_env.py"),
+                     "import os\n"
+                     "print('DSH_HOME=' + os.environ.get('DSH_HOME', ''))\n"
+                     "print('TEMP=' + os.environ.get('TEMP', ''))\n"
+                     "print('5')\n")
+    os.environ["MWP_DSH_CMD"] = f'"{sys.executable}" {stub_env}' if os.name == "nt" else f"{sys.executable} {stub_env}"
+    res = dsh_adapter.run("1+1", timeout=30)
+    lines = res["stdout"].splitlines()
+    check("子进程拿到 DSH_HOME（指向仓库）", lines[0] == "DSH_HOME=" + os.path.abspath(home), lines[0])
+    check("子进程临时目录也在仓库里", lines[1].startswith("TEMP=" + os.path.abspath(dsh_adapter.TMP_PATCH_ROOT)),
+          lines[1])
+
     print("\n=== 9) 仓库里不许出现真 key ===")
     hits = []
     key_prefix = "nvapi" + "-"
