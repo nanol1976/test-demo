@@ -49,6 +49,8 @@ SCRIPTS = [
     ("Batch28 只读口令：能看不能动", "verify_b28.py"),
     ("Batch29 优雅停止：标记文件 + worker 认领", "verify_b29.py"),
     ("Batch32-1 异构复核：派生/逐项/闸门/只写一次", "verify_b32.py"),
+    ("Batch32-2A 插件沉淀：目录规范/元数据/版本递增/授权字段", "verify_b32_2a.py"),
+    ("Batch32-2B 插件授权：实例>岗位>撤权 + 拒单审计", "verify_b32_2b.py"),
 ]
 
 

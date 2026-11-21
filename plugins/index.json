@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "updated_at": "2026-11-21",
+  "plugins": [
+    {
+      "name": "deploy-smoke",
+      "latest": "1.0.0",
+      "versions": [
+        "1.0.0"
+      ],
+      "review_state": "reviewed",
+      "granted_to": [],
+      "granted_roles": [
+        "ops"
+      ],
+      "revoked_instances": []
+    }
+  ]
+}

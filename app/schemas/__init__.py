@@ -51,6 +51,9 @@ class TaskDispatchPayload(BaseModel):
     target_worker: Optional[Literal["master", "dsh", "workbuddy", "codex", "user"]] = None
     # Batch31-D：派给哪个岗位（instance_id，形如「角色-主机」）。为空 = 身份族内先到先得。
     target_instance: Optional[str] = Field(default=None, max_length=64)
+    # Batch32-2：本单要用的插件（plugins/<name>/ 的目录名）。带它就必须带 target_instance，
+    # 平台按「实例 > 岗位 > 撤权」三级判授权，未授权直接拒单（不建任务、只落审计）。
+    plugin: Optional[str] = Field(default=None, max_length=64)
     # Batch9：执行规格（Worker 怎么干）。平台只搬运不解释，字段语义见 docs/base/09。
     exec: Optional[Dict[str, Any]] = None
     # Batch11：优先级（数字，越大越先）。平台只搬运不排序，排序由 Worker 自己决定。

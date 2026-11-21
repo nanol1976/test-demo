@@ -751,6 +751,109 @@ def stage_static():
     run_all32 = read(os.path.join(ROOT, "scripts", "run_all.py"))
     check("Batch32-1 验收脚本进全量测试清单", "verify_b32.py" in run_all32)
 
+    # 1.8i Batch32-2A：插件沉淀只读侧。红线守「不进审核就不许发」：
+    # 元数据必填、版本不回退、新版本必须重审、授权与撤权不许同列一个人。
+    plug_index = os.path.join(ROOT, "plugins", "index.json")
+    check("Batch32-2 插件索引在位", os.path.exists(plug_index))
+    if os.path.exists(plug_index):
+        try:
+            plug_data = json.loads(read(plug_index))
+        except ValueError:
+            plug_data = {}
+        check("Batch32-2 索引结构合法（plugins 数组 + 每项五字段）",
+              isinstance(plug_data.get("plugins"), list) and plug_data["plugins"]
+              and all(k in plug_data["plugins"][0]
+                      for k in ("name", "latest", "versions", "review_state", "granted_to")),
+              "索引结构不对")
+        check("Batch32-2 索引里的状态值域只有 draft/reviewed/revoked",
+              all(p.get("review_state") in ("draft", "reviewed", "revoked")
+                  for p in plug_data.get("plugins", [])))
+    plug_dir = os.path.join(ROOT, "plugins", "deploy-smoke")
+    check("Batch32-2 插件四件套齐全（PLUGIN/SKILL/CHANGELOG/probes）",
+          all(os.path.exists(os.path.join(plug_dir, f))
+              for f in ("PLUGIN.md", "SKILL.md", "CHANGELOG.md", "probes.py")))
+    plug_md = read(os.path.join(plug_dir, "PLUGIN.md")) if os.path.exists(plug_index) else ""
+    check("Batch32-2 PLUGIN.md 八项必填字段齐全",
+          all(k + ":" in plug_md for k in
+              ("name", "version", "owner", "applies_to", "inputs", "outputs",
+               "criteria_template", "reviewer_hint")), "元数据缺字段")
+    check("Batch32-2 PLUGIN.md 每条标准可拆（criteria 用分号分隔的多条）",
+          len([x for x in plug_md.split("criteria_template:", 1)[-1].split("\n")[0]
+               .replace("；", ";").split(";") if x.strip()]) >= 2,
+          "验收标准拆不出两条以上")
+    review32a = read(os.path.join(ROOT, "scripts", "plugin_review.py"))
+    check("Batch32-2 校验器纯标准库（不引 requests/yaml 一类第三方）",
+          "import subprocess" in review32a and "import json" in review32a
+          and "yaml" not in review32a and "requests" not in review32a)
+    check("Batch32-2 必填字段与 semver 在代码里硬校验",
+          "PLUGIN.md 缺必填字段" in review32a and "不是三段 semver" in review32a)
+    check("Batch32-2 版本回退与「新版本必须重审」写死",
+          "版本回退" in review32a and "review_state 必须是 draft" in review32a,
+          "版本口径没落地")
+    check("Batch32-2 授权与撤权不许同列一个实例",
+          "同一实例既在 granted_to 又在 revoked_instances" in review32a and "overlap" in review32a,
+          "授权互斥没落地")
+    check("Batch32-2 只有校验全过才写索引（--apply 不绕过红线）",
+          "if ok and args.apply" in review32a and "def apply_to_index" in review32a)
+    probes_py = os.path.join(plug_dir, "probes.py")
+    check("Batch32-2 probes 探针三判据在位（健康/迁移/文档）",
+          os.path.exists(probes_py)
+          and all(k in read(probes_py) for k in ("_check_health", "_check_schema", "_check_docs")))
+    if os.path.exists(probes_py):
+        try:
+            py_compile.compile(probes_py, cfile=os.path.join(tmpdir, "probe.pyc"), doraise=True)
+            probes_ok, probes_msg = True, ""
+        except py_compile.PyCompileError as exc:
+            probes_ok, probes_msg = False, str(exc)[:80]
+        check("Batch32-2 probes.py 单独编译通过（不进主扫描、但也不许是坏语法）",
+              probes_ok, probes_msg)
+        proc = subprocess.run([sys.executable, probes_py, ROOT],
+                              capture_output=True, text=True, timeout=60)
+        check("Batch32-2 探针在本仓库上真跑得通（exit 0）",
+              proc.returncode == 0, (proc.stdout or proc.stderr or "")[-100:])
+    check("Batch32-2 验收脚本进全量测试清单",
+          "verify_b32_2a.py" in read(os.path.join(ROOT, "scripts", "run_all.py")))
+
+    # 1.8j Batch32-2B：派单侧授权。红线守「没授权不许派、拒了必须留痕、留痕不进台账」。
+    plug_svc = read(os.path.join(ROOT, "app", "services", "plugins.py"))
+    check("Batch32-2 授权判定三级口径写死（撤权 > 实例 > 岗位 > 拒）",
+          "revoked_instances" in plug_svc and "granted_to" in plug_svc
+          and "granted_roles" in plug_svc and "撤权优先于一切授权" in plug_svc,
+          "三级判定没落地")
+    check("Batch32-2 岗位口径与看板一致（instance 前缀）",
+          "def instance_role" in plug_svc and 'split("-", 1)' in plug_svc,
+          "岗位推导与看板方章口径不一致")
+    check("Batch32-2 只放 reviewed 的插件（draft/revoked 一律拒）",
+          'state != "reviewed"' in plug_svc and "未过审核" in plug_svc)
+    check("Batch32-2 索引热改即生效（按 mtime+size 缓存）",
+          "st_mtime_ns" in plug_svc and "MWP_PLUGINS_DIR" in plug_svc)
+    dispatch32b = read(os.path.join(ROOT, "app", "services", "dispatch.py"))
+    check("Batch32-2 派单带 plugin 时先判授权再建流水线/任务",
+          "def _gate_plugin" in dispatch32b and "def _resolve_plugin" in dispatch32b
+          and dispatch32b.index("_gate_plugin(db, repo, envelope") <
+          dispatch32b.index("repo.create_pipeline("),
+          "授权判定排在建流水线之后，拒单会留假流水线")
+    check("Batch32-2 带 plugin 必须指定岗位（否则拒）",
+          "必须指定 target_instance" in dispatch32b)
+    check("Batch32-2 拒单抛错前审计已落库（自己 commit，不回滚）",
+          "自己 commit" in read(os.path.join(ROOT, "app", "repositories", "ledger.py"))
+          and "record_plugin_audit" in read(os.path.join(ROOT, "app", "repositories", "ledger.py")))
+    model32b = read(os.path.join(ROOT, "app", "models", "__init__.py"))
+    check("Batch32-2 审计表 append-only 且 decision 两值",
+          "class PluginAudit" in model32b and "ck_plugin_audit_decision" in model32b)
+    check("Batch32-2 迁移 v012 在位",
+          os.path.exists(os.path.join(migrate_dir, "v012_plugin_audit.py")))
+    schema32b = read(os.path.join(ROOT, "app", "schemas", "__init__.py"))
+    check("Batch32-2 派发载荷有 plugin 字段（接口路径不变，只加字段）",
+          "plugin: Optional[str]" in schema32b)
+    check("Batch32-2 派单侧验收脚本进全量测试清单",
+          "verify_b32_2b.py" in read(os.path.join(ROOT, "scripts", "run_all.py")))
+    audit_cli = os.path.join(ROOT, "scripts", "plugin_audit.py")
+    check("Batch32-2 审计有只读查询入口（不改接口面就能查被拒单）",
+          os.path.exists(audit_cli)
+          and "--only-deny" in read(audit_cli)
+          and "import sqlite3" in read(audit_cli), "审计查不了等于没留痕")
+
     # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
     # 不许各处自己拼 "data/STOP"；worker 只读标记，不写、不删。
     routes_commands_py = read(os.path.join(ROOT, "app", "api", "routes_commands.py"))

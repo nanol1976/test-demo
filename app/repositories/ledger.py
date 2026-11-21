@@ -8,7 +8,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import PipelineLedger, TaskLedger
+from app.models import PipelineLedger, PluginAudit, TaskLedger
 
 PIPELINE_STATUSES = {"pending", "running", "success", "aborted", "failed"}
 TASK_STATUSES = {
@@ -330,6 +330,48 @@ class LedgerRepository:
         self.db.commit()
         self.db.refresh(row)
         return row
+
+    def record_plugin_audit(
+        self,
+        trace_id: str,
+        task_id: Optional[str],
+        plugin_name: str,
+        plugin_version: Optional[str],
+        worker_id: str,
+        instance_id: str,
+        decision: str,
+        reason: Optional[str] = None,
+    ) -> PluginAudit:
+        """插件授权判定落审计（Batch32-2）。append-only：只插入，不更新、不删除。
+
+        拒单不建任务行（没接的活不占台账），所以这条审计是"被拒过"的唯一留痕。
+        自己 commit——拒单随后会抛异常，不能让审计跟着事务一起回滚。
+        """
+        row = PluginAudit(
+            trace_id=trace_id,
+            task_id=task_id,
+            plugin_name=plugin_name,
+            plugin_version=plugin_version,
+            worker_id=worker_id,
+            instance_id=instance_id or "",
+            decision=decision,
+            reason=reason,
+        )
+        self.db.add(row)
+        self.db.commit()
+        self.db.refresh(row)
+        return row
+
+    def list_plugin_audit(self, limit: int = 50, plugin_name: Optional[str] = None,
+                          instance_id: Optional[str] = None) -> List[PluginAudit]:
+        """按时间倒序读审计（只读，不写）。"""
+        stmt = select(PluginAudit)
+        if plugin_name:
+            stmt = stmt.where(PluginAudit.plugin_name == plugin_name)
+        if instance_id:
+            stmt = stmt.where(PluginAudit.instance_id == instance_id)
+        stmt = stmt.order_by(PluginAudit.id.desc()).limit(max(1, min(limit, 200)))
+        return list(self.db.scalars(stmt))
 
     def record_dispatch(
         self,

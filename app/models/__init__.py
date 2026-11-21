@@ -148,6 +148,37 @@ class TaskLedger(Base):
     )
 
 
+class PluginAudit(Base):
+    """插件授权判定审计（Batch32-2 派单侧）。
+
+    派单带 `plugin` 字段时，平台要回答「这个岗位有没有资格用这个插件」。
+    结论不能只活在日志里——被拒过的单不会进任务台账（没接的活不该占台账行），
+    所以拒单必须落到这张 append-only 表：谁、哪个岗位、哪个插件哪个版本、因为什么被拒。
+
+    decision 只有 allow / deny 两值；撤销授权后下一次派单立刻记 deny，历史行不动。
+    """
+
+    __tablename__ = "plugin_audit"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False,
+                                                 default=func.now())
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    task_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    plugin_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    plugin_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    worker_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    instance_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    # 判定依据要能复述：命中哪一条（revoked / granted_to / granted_roles / 未登记 / 未过审）
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("decision IN ('allow', 'deny')", name="ck_plugin_audit_decision"),
+        Index("ix_plugin_audit_target", "plugin_name", "instance_id", "created_at"),
+    )
+
+
 class MessageArchive(Base):
     __tablename__ = "message_archive"
 

@@ -7,6 +7,7 @@
 """
 import base64
 import json
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -262,6 +263,71 @@ def _payload_json(payload: Dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
 
 
+def _resolve_plugin(payload: Dict[str, Any]) -> Optional[str]:
+    """Batch32-2：本单用哪个插件（plugins/<name>/ 的目录名）。
+
+    只做格式校验：小写字母数字与 -_ ., ≤64。是否存在/是否过审/是否授权，
+    由 app/services/plugins.py 判（索引可热改，不在报文层写死）。
+    """
+    raw = payload.get("plugin")
+    if raw is None or raw == "":
+        return None
+    if not isinstance(raw, str):
+        raise IllegalTransitionError(
+            f"task_dispatch 被拒：payload.plugin 必须是字符串（收到 {type(raw).__name__}）"
+        )
+    value = raw.strip()
+    if not value:
+        return None
+    if len(value) > 64:
+        raise IllegalTransitionError("task_dispatch 被拒：payload.plugin 超过 64 字符")
+    if not re.match(r"^[a-z0-9][a-z0-9._-]*$", value):
+        raise IllegalTransitionError(
+            f"task_dispatch 被拒：payload.plugin 只接受小写字母数字与 ._-（收到 {value!r}）"
+        )
+    return value
+
+
+def _gate_plugin(db: Session, repo: LedgerRepository, envelope: Envelope,
+                 payload: Dict[str, Any], plugin_name: str,
+                 target_worker: str, target_instance: Optional[str]) -> None:
+    """带插件的派单：先判授权、把结论落审计，再决定放不放行。
+
+    两道都必须过：
+      1) 必须指定 target_instance（不指定岗位就没法判「这个岗位有没有资格」）；
+      2) app/services/plugins.py 的三级判定必须 allow。
+    拒单不建任务、不建流水线，但审计行必须留下（append-only，自己 commit，
+    不能因为随后抛异常被回滚吃掉）。
+    """
+    from app.services.plugins import judge_plugin
+
+    if not target_instance:
+        repo.record_plugin_audit(
+            trace_id=envelope.trace_id, task_id=envelope.task_id,
+            plugin_name=plugin_name, plugin_version=None,
+            worker_id=target_worker, instance_id="",
+            decision="deny",
+            reason="派单带 plugin 时必须指定 target_instance（不指定岗位无法判授权）",
+        )
+        raise IllegalTransitionError(
+            f"task_dispatch 被拒：带 plugin（{plugin_name}）的派单必须指定 target_instance，"
+            "否则无法判断这个岗位有没有插件权限"
+        )
+
+    verdict = judge_plugin(plugin_name, target_instance)
+    repo.record_plugin_audit(
+        trace_id=envelope.trace_id, task_id=envelope.task_id,
+        plugin_name=plugin_name, plugin_version=verdict.get("version"),
+        worker_id=target_worker, instance_id=target_instance,
+        decision=verdict["decision"], reason=verdict["reason"],
+    )
+    if verdict["decision"] != "allow":
+        raise IllegalTransitionError(
+            f"task_dispatch 被拒：岗位 {target_instance} 无权使用插件 {plugin_name}"
+            f"（{verdict['reason']}）"
+        )
+
+
 @_idempotent
 def handle_task_dispatch(db: Session, envelope: Envelope) -> HandlerResult:
     payload: Dict[str, Any] = envelope.payload or {}
@@ -272,6 +338,14 @@ def handle_task_dispatch(db: Session, envelope: Envelope) -> HandlerResult:
         )
     repo = LedgerRepository(db)
 
+    # 先把「派给谁、用哪个插件」解出来：插件授权不过的单，连流水线都不建，
+    # 只在 plugin_audit 留一行拒单痕迹（任务台账不占行）。
+    target_worker = _resolve_target_worker(payload, envelope)
+    target_instance = _resolve_target_instance(payload)
+    plugin_name = _resolve_plugin(payload)
+    if plugin_name:
+        _gate_plugin(db, repo, envelope, payload, plugin_name, target_worker, target_instance)
+
     pipeline = repo.get_pipeline(envelope.trace_id)
     if pipeline is None:
         pipeline = repo.create_pipeline(
@@ -280,10 +354,6 @@ def handle_task_dispatch(db: Session, envelope: Envelope) -> HandlerResult:
 
     _require_dispatch_gate(repo, pipeline, payload, envelope)
 
-    target_worker = _resolve_target_worker(payload, envelope)
-
-    # Batch31-D：指定岗位（instance_id）。不指定 = 身份族内先到先得（老行为）。
-    target_instance = _resolve_target_instance(payload)
     if target_instance and not repo.worker_registered(target_worker, target_instance):
         # 派给从没注册过的岗位名 = 错字或岗位已下线，任务会永远挂空，必须当场拦下
         raise IllegalTransitionError(
