@@ -125,7 +125,7 @@ class LedgerRepository:
         return int(self.db.execute(stmt).scalar() or 0)
 
     @staticmethod
-    def _task_filters(trace_id, status, target_worker, q):
+    def _task_filters(trace_id, status, target_worker, q, instance_id=None, include_all=False):
         conds = []
         if trace_id:
             conds.append(TaskLedger.trace_id == trace_id)
@@ -137,6 +137,16 @@ class LedgerRepository:
             conds.append(TaskLedger.target_worker == target_worker)
         if q:
             conds.append(TaskLedger.task_id.contains(q))
+        if instance_id:
+            # Batch31-D：按「谁在问」收敛。指定了岗位的任务只给该岗位看；
+            # 未指定岗位的老任务保持先到先得，不对任何人隐藏。
+            conds.append(
+                or_(TaskLedger.target_instance.is_(None), TaskLedger.target_instance == instance_id)
+            )
+        elif not include_all:
+            # 没说自己是哪个岗位的请求（含未升级的老 Worker），一律看不到「指定岗位」的任务。
+            # 否则老 Worker 不带实例名也能把指定给别人的活抢走，分工就是空话。
+            conds.append(TaskLedger.target_instance.is_(None))
         return conds
 
     def search_tasks(
@@ -148,11 +158,13 @@ class LedgerRepository:
         sort: str = "task_id_asc",
         limit: int = 20,
         offset: int = 0,
+        instance_id: Optional[str] = None,
+        include_all: bool = False,
     ) -> List[TaskLedger]:
         if sort not in TASK_SORTS:
             raise ValueError(f"非法排序: {sort}")
         stmt = select(TaskLedger)
-        conds = self._task_filters(trace_id, status, target_worker, q)
+        conds = self._task_filters(trace_id, status, target_worker, q, instance_id, include_all)
         if conds:
             stmt = stmt.where(*conds)
         order = TaskLedger.task_id.desc() if sort == "task_id_desc" else TaskLedger.task_id.asc()
@@ -165,14 +177,22 @@ class LedgerRepository:
         status: Optional[str] = None,
         target_worker: Optional[str] = None,
         q: Optional[str] = None,
+        instance_id: Optional[str] = None,
+        include_all: bool = False,
     ) -> int:
         stmt = select(func.count()).select_from(TaskLedger)
-        conds = self._task_filters(trace_id, status, target_worker, q)
+        conds = self._task_filters(trace_id, status, target_worker, q, instance_id, include_all)
         if conds:
             stmt = stmt.where(*conds)
         return int(self.db.execute(stmt).scalar() or 0)
 
     # ---- Batch4：超时/心跳/熔断/暂停所需的读取与状态位 ----
+    def worker_registered(self, worker_id: str, instance_id: str) -> bool:
+        """Batch31-D：这个岗位是否在注册表里出现过（按 (worker_id, instance_id) 主键）。"""
+        from app.models import WorkerRegistry
+
+        return self.db.get(WorkerRegistry, (worker_id, instance_id)) is not None
+
     def list_tasks_by_status(self, status: str) -> List[TaskLedger]:
         if status not in TASK_STATUSES:
             raise ValueError(f"非法任务状态: {status}")
@@ -224,6 +244,7 @@ class LedgerRepository:
         max_retry: int = 3,
         is_high_risk: bool = False,
         status: str = "待拆解",
+        target_instance: Optional[str] = None,
     ) -> TaskLedger:
         if status not in TASK_STATUSES:
             raise ValueError(f"非法任务状态: {status}")
@@ -231,6 +252,7 @@ class LedgerRepository:
             task_id=task_id,
             trace_id=trace_id,
             target_worker=target_worker,
+            target_instance=target_instance,
             status=status,
             max_retry=max_retry,
             remaining_retry=max_retry,
@@ -303,6 +325,7 @@ class LedgerRepository:
         when: datetime,
         payload_json: Optional[str] = None,
         target_worker: Optional[str] = None,
+        target_instance: Optional[str] = None,
     ) -> Optional[TaskLedger]:
         """派发落账：dispatch_time + 载荷原文（+ 必要时纠正执行方归属）。
 
@@ -317,6 +340,9 @@ class LedgerRepository:
             row.dispatch_payload = payload_json
         if target_worker is not None:
             row.target_worker = target_worker
+        # Batch31-D：重派时以最新一次指定为准；显式传空串表示改回"不指定岗位"
+        if target_instance is not None:
+            row.target_instance = target_instance or None
         self.db.commit()
         self.db.refresh(row)
         return row
@@ -336,6 +362,20 @@ class LedgerRepository:
         if row is None:
             return None
         row.return_time = when
+        self.db.commit()
+        self.db.refresh(row)
+        return row
+
+    def mark_done_instance(self, task_id: str, instance_id: str) -> Optional[TaskLedger]:
+        """Batch31-D：把「实际由哪个岗位完成」写进台账。
+
+        回执报文给出 metadata.instance_id 时调用；老 Worker 不给就保持空，
+        不阻断回执（兼容优先），但台账上会显示为空，无法追溯。
+        """
+        row = self.db.get(TaskLedger, task_id)
+        if row is None or not instance_id:
+            return None
+        row.done_instance = instance_id[:64]
         self.db.commit()
         self.db.refresh(row)
         return row

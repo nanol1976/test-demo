@@ -94,10 +94,13 @@ class PlatformClient:
                 parsed = {"raw": raw}
             return exc.code, parsed
 
-    def list_active_tasks(self, worker_id: str, size: int = 50):
-        qs = urllib.parse.urlencode(
-            {"status": ACTIVE_STATUS, "target_worker": worker_id, "page": 1, "size": size}
-        )
+    def list_active_tasks(self, worker_id: str, size: int = 50, instance_id: str = ""):
+        params = {"status": ACTIVE_STATUS, "target_worker": worker_id, "page": 1, "size": size}
+        if instance_id:
+            # Batch31-D：带上自己的岗位名，平台只回「未指定岗位」或「指定给我」的任务。
+            # 老平台不认这个参数也不要紧，多传一个查询串会被忽略。
+            params["instance_id"] = instance_id
+        qs = urllib.parse.urlencode(params)
         code, body = self._request("GET", "/api/tasks?" + qs)
         if code != 200:
             raise PlatformError(f"拉取任务失败：HTTP {code} {body}")
@@ -423,6 +426,7 @@ class WorkerAgent:
                 "known_issues": "" if artifacts else "未声明 artifacts，产出未做存在性核验",
                 "heartbeats": hb.sent,
                 "worker_id": self.worker_id,
+                "instance_id": self.instance_id,
                 "finished_at": now_iso(),
             },
         })
@@ -453,7 +457,8 @@ class WorkerAgent:
     def _reject(self, trace_id: str, task_id: str, reason: str) -> None:
         code, body = self.client.post_message(
             envelope(trace_id, task_id, "task_reject", self.worker_id,
-                     {"reason": reason, "details": {"worker_id": self.worker_id}})
+                     {"reason": reason, "details": {"worker_id": self.worker_id,
+                                                     "instance_id": self.instance_id}})
         )
         log("task_reject", task_id=task_id, http=code, reason=reason, body=body)
         if code == 202:
@@ -537,7 +542,7 @@ class WorkerAgent:
                     continue
 
                 try:
-                    tasks = self.client.list_active_tasks(self.worker_id)
+                    tasks = self.client.list_active_tasks(self.worker_id, instance_id=self.instance_id)
                     backoff = 0
                 except (PlatformError, urllib.error.URLError, OSError) as exc:
                     backoff = min(backoff + 1, 6)

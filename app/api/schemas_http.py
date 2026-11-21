@@ -27,6 +27,10 @@ class TaskView(BaseModel):
     payload: Optional[Dict[str, Any]] = None
     # Batch12：最近一次心跳时间（在线视图用；从未心跳为 None）
     last_heartbeat_time: Optional[str] = None
+    # Batch31-D：派给哪个岗位（未指定为 None = 身份族内先到先得）
+    target_instance: Optional[str] = None
+    # Batch31-D：实际由哪个岗位完成（回执未带 instance_id 时为 None）
+    done_instance: Optional[str] = None
 
 
 class PipelineView(BaseModel):

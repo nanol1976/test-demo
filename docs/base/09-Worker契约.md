@@ -15,9 +15,16 @@ Worker 是执行层。本文件定义 Worker 怎么接活、怎么报活、怎�
 平台不主动推给你——**你自己去平台取**。Sandbox 里只要两个 HTTP 动作就够，不需要任何额外接口：
 
 ```http
-GET /api/tasks?status=执行中&target_worker=<我>      # 接活：拿派给我的、正在等我干的任务
+GET /api/tasks?status=执行中&target_worker=<我>&instance_id=<我的岗位名>   # 接活：拿派给我的、正在等我干的任务
 POST /api/messages                                    # 报活 / 交活 / 报做不了
 ```
+
+**`instance_id` 不是可选的（Batch31-D 起）**：它就是你的岗位名（形如 `qa-mac`）。
+
+- 带上它：能看到「没指定岗位的活」+「指定给我的活」；
+- 不带：只能看到「没指定岗位的活」，**任何指定给别人的活对你不可见**（哪怕 `target_worker` 同族）。
+
+这是为了防止同一身份族的多个实例互相抢活——首单就发生过 Windows 抢在质检前 5 秒做完、质检白跑一趟还被 409 拒。回执里也要带 `metadata.instance_id`，否则台账记不下「到底谁干的」（`done_instance` 会留空）。
 
 响应里的每个任务带 `payload`（派发报文原样搬运），这就是"要干什么"的来源：
 

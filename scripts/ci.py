@@ -272,6 +272,26 @@ def stage_static():
     check("Batch31 质检岗默认只碰 scripts（岗位即权限边界）",
           '"$ROLE" = "qa"' in mac_wrapper_py and "scripts" in mac_wrapper_py)
 
+    # 1.5b4 实例级路由红线（Batch31-D）：派单能指定岗位、回执能追溯岗位
+    # 注意：model_py / dispatch_py 的公共读取在本段之后，这里自己读，避免依赖顺序
+    model_b31d = read(os.path.join(ROOT, "app", "models", "__init__.py"))
+    dispatch_b31d = read(os.path.join(ROOT, "app", "services", "dispatch.py"))
+    ledger_py = read(os.path.join(ROOT, "app", "repositories", "ledger.py"))
+    worker_py = read(os.path.join(ROOT, "worker", "agent_worker.py"))
+    check("台账有 target_instance / done_instance 两列",
+          "target_instance" in model_b31d and "done_instance" in model_b31d, "缺列")
+    check("迁移 v010 存在", os.path.exists(os.path.join(ROOT, "migrations", "versions",
+                                                       "v010_task_instance.py")))
+    check("派单载荷支持 target_instance",
+          "target_instance" in read(os.path.join(ROOT, "app", "schemas", "__init__.py")))
+    check("派给未注册岗位当场拦下（不建任务）", "在注册表里从未出现" in dispatch_b31d)
+    check("说不清自己是谁的请求看不到指定岗位的活",
+          "elif not include_all" in ledger_py and "target_instance.is_(None)" in ledger_py)
+    check("Worker 拉活带 instance_id",
+          'params["instance_id"]' in worker_py and "instance_id=self.instance_id" in worker_py)
+    check("回执 metadata 带 instance_id（可追溯执行岗位）",
+          '"instance_id": self.instance_id' in worker_py)
+
     # 1.5b3 执行方在线视图红线（Batch12）：靠任务心跳推断，不新增接口
     model_py = read(os.path.join(ROOT, "app", "models", "__init__.py"))
     check("台账有 last_heartbeat_time 列", "last_heartbeat_time" in model_py, "缺列")

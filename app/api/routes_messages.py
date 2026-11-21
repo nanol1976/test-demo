@@ -98,6 +98,8 @@ def _task_view(task) -> TaskView:
         payload=_task_payload(task),
         last_heartbeat_time=(ensure_utc(task.last_heartbeat_time).isoformat()
                              if task.last_heartbeat_time else None),
+        target_instance=getattr(task, "target_instance", None),
+        done_instance=getattr(task, "done_instance", None),
     )
 
 

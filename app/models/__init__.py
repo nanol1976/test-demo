@@ -124,6 +124,10 @@ class TaskLedger(Base):
     dispatch_payload: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Batch12：最近一次心跳时间（可空）。在线视图靠它聚合，不新增接口。
     last_heartbeat_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Batch31-D：派给哪个岗位（instance_id，可空）。为空 = 身份族内先到先得，保持老行为。
+    target_instance: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Batch31-D：实际由哪个岗位完成（回执 metadata.instance_id 落库，可空）。
+    done_instance: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     pipeline: Mapped["PipelineLedger"] = relationship("PipelineLedger", back_populates="tasks")
 

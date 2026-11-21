@@ -100,7 +100,16 @@ def list_tasks(
     trace_id: Optional[str] = Query(default=None),
     status: Optional[str] = Query(default=None),
     target_worker: Optional[str] = Query(default=None),
+    instance_id: Optional[str] = Query(
+        default=None,
+        max_length=64,
+        description="按「谁在问」收敛：传了实例名，只返回未指定岗位的任务 + 指定给该岗位的任务（Batch31-D）",
+    ),
     q: Optional[str] = Query(default=None, max_length=128),
+    include_all: bool = Query(
+        default=False,
+        description="管理视图：true 时不过滤指定岗位的任务（默认 false，未说明身份只能看到不指定岗位的活）",
+    ),
     sort: str = Query(default="task_id_asc"),
     page: int = Query(default=1),
     size: Optional[int] = Query(default=None),
@@ -110,9 +119,13 @@ def list_tasks(
     repo = LedgerRepository(db)
     keyword = (q or "").strip() or None
     try:
-        total = repo.count_tasks(trace_id, status, target_worker, keyword)
+        total = repo.count_tasks(
+            trace_id, status, target_worker, keyword, instance_id, include_all
+        )
         items = repo.search_tasks(
-            trace_id, status, target_worker, keyword, sort, limit=size, offset=(page - 1) * size
+            trace_id, status, target_worker, keyword, sort,
+            limit=size, offset=(page - 1) * size, instance_id=instance_id,
+            include_all=include_all,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))

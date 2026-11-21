@@ -230,6 +230,32 @@ def _resolve_target_worker(payload: Dict[str, Any], envelope: Envelope) -> str:
     return raw
 
 
+def _resolve_target_instance(payload: Dict[str, Any]) -> Optional[str]:
+    """Batch31-D：任务指定给哪个岗位。
+
+    口径：`payload.target_instance`，形如「角色-主机」（如 qa-mac）。
+    缺省/空串 = 不指定，身份族内先到先得（Batch9 以来一直如此）。
+    只做格式校验，是否真实注册过由调用方查注册表。
+    """
+    raw = payload.get("target_instance")
+    if raw is None or raw == "":
+        return None
+    if not isinstance(raw, str):
+        raise IllegalTransitionError(
+            f"task_dispatch 被拒：payload.target_instance 必须是字符串（收到 {type(raw).__name__}）"
+        )
+    value = raw.strip()
+    if not value:
+        return None
+    if len(value) > 64:
+        raise IllegalTransitionError("task_dispatch 被拒：payload.target_instance 超过 64 字符")
+    if not any(ch.isalnum() or ch in "-_." for ch in value):
+        raise IllegalTransitionError(
+            f"task_dispatch 被拒：payload.target_instance 只接受字母数字与 -_.（收到 {value!r}）"
+        )
+    return value
+
+
 def _payload_json(payload: Dict[str, Any]) -> str:
     """载荷原文落库。平台只搬运不解释，故原样序列化（稳定排序便于比对）。"""
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
@@ -255,6 +281,15 @@ def handle_task_dispatch(db: Session, envelope: Envelope) -> HandlerResult:
 
     target_worker = _resolve_target_worker(payload, envelope)
 
+    # Batch31-D：指定岗位（instance_id）。不指定 = 身份族内先到先得（老行为）。
+    target_instance = _resolve_target_instance(payload)
+    if target_instance and not repo.worker_registered(target_worker, target_instance):
+        # 派给从没注册过的岗位名 = 错字或岗位已下线，任务会永远挂空，必须当场拦下
+        raise IllegalTransitionError(
+            f"task_dispatch 被拒：岗位 {target_instance} 在注册表里从未出现"
+            f"（worker_id={target_worker}），请先确认岗位名（形如「角色-主机」）"
+        )
+
     task = repo.get_task(envelope.task_id)
     if task is None:
         # 首次派发：按报文建任务，落到「待调度下发」后再转执行中
@@ -266,6 +301,7 @@ def handle_task_dispatch(db: Session, envelope: Envelope) -> HandlerResult:
             max_retry=int(payload.get("max_retry", 3)),
             is_high_risk=bool(payload.get("is_high_risk", False)),
             status="待调度下发",
+            target_instance=target_instance,
         )
         task = repo.get_task(envelope.task_id)
     else:
@@ -288,6 +324,7 @@ def handle_task_dispatch(db: Session, envelope: Envelope) -> HandlerResult:
         envelope.timestamp,
         payload_json=_payload_json(payload),
         target_worker=target_worker,
+        target_instance=target_instance or "",
     )
     repo.update_task_status(envelope.task_id, "执行中")
     return HandlerResult(archive_id, True, "任务已下发，状态：执行中")
@@ -315,8 +352,21 @@ def handle_task_return(db: Session, envelope: Envelope) -> HandlerResult:
 
     archive_id = archive_message(db, envelope)
     repo.mark_return_time(envelope.task_id, envelope.timestamp)
+    # Batch31-D：回执带来 instance_id 就落「实际执行岗位」；老 Worker 不带则留空（不阻断）
+    meta = (envelope.payload or {}).get("metadata") or {}
+    done_instance = meta.get("instance_id") if isinstance(meta, dict) else None
+    if isinstance(done_instance, str) and done_instance.strip():
+        repo.mark_done_instance(envelope.task_id, done_instance.strip())
     repo.update_task_status(envelope.task_id, "待验收")
-    return HandlerResult(archive_id, True, "任务已回传，状态：待验收")
+    note = "任务已回传，状态：待验收"
+    if task.target_instance and done_instance and done_instance.strip() != task.target_instance:
+        # 指定了岗位却被别人干了：不改状态（成果真实有效），但在回执里当场点出来
+        note += f"（注意：实际执行岗位 {done_instance.strip()} ≠ 指定岗位 {task.target_instance}）"
+        logger.warning(
+            "task_return 岗位不符 task=%s 指定=%s 实际=%s",
+            envelope.task_id, task.target_instance, done_instance.strip(),
+        )
+    return HandlerResult(archive_id, True, note)
 
 
 @_idempotent
