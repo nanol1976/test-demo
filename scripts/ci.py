@@ -576,6 +576,29 @@ def stage_static():
           all(r in app_js for r in ("stock", "doc", "viz", "news", "dev", "qa", "ops", "mgmt")),
           "岗位集合不全")
 
+    # 1.8b4 Batch31 试点：首单真派出去后暴露的三条，全部转成红线。
+    # ① 验收路径原本是空的 —— 状态枚举里有「验收通过」，但没有任何报文能写它，
+    #    六步 SOP 的第 5 步（验收）实际不成立。
+    # ② Mac 上 launchd 直接 exec 一个非可执行脚本会报 EX_CONFIG 78 并进 penalty box 反复重试；
+    #    plist 显式用 /bin/bash 调启动器，别指望 git 里保留可执行位。
+    # ③ 脚本要能在 system python 3.9 下跑（这台 Mac 没有 homebrew python，交互 shell 里那个
+    #    3.14 是跑工具自带的，launchd 环境看不见）。
+    ledger_py31 = read(os.path.join(ROOT, "app", "repositories", "ledger.py"))
+    dispatch_py31 = read(os.path.join(ROOT, "app", "services", "dispatch.py"))
+    schemas_py31 = read(os.path.join(ROOT, "app", "schemas", "__init__.py"))
+    snap_py31 = read(os.path.join(ROOT, "scripts", "daily_snapshot.py"))
+    check("Batch31 验收通过有写入路径（台账 + 报文模型 + 处理器三处对齐）",
+          "def accept_pending_tasks" in ledger_py31
+          and "accept_tasks" in schemas_py31
+          and "accept_pending_tasks" in dispatch_py31,
+          "验收通过仍然没人能写")
+    check("Batch31 plist 用 /bin/bash 调启动器（不依赖可执行位）",
+          "<string>/bin/bash</string>" in mac_install_py,
+          "plist 仍是直接 exec 脚本")
+    check("Batch31 快照脚本能在 system python 3.9 下跑（延迟注解）",
+          "from __future__ import annotations" in snap_py31,
+          "缺 future import，3.9 会报 PEP604")
+
     # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
     # 不许各处自己拼 "data/STOP"；worker 只读标记，不写、不删。
     routes_commands_py = read(os.path.join(ROOT, "app", "api", "routes_commands.py"))

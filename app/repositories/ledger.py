@@ -268,6 +268,26 @@ class LedgerRepository:
         self.db.refresh(row)
         return row
 
+    def accept_pending_tasks(self, trace_id: str) -> List[str]:
+        """把一条流水线下所有「待验收」任务推到「验收通过」，返回被推进的 task_id。
+
+        Batch31：协议里 7 种报文没有一种能写「验收通过」—— 任务回传后永远停在「待验收」，
+        六步 SOP 的第 5 步（验收）实际是空的。这里只做状态推进（台账铁律允许），
+        不新增报文类型，由既有的 task_summary 在 Master 显式声明 accept_tasks 时调用。
+        """
+        rows = self.db.execute(
+            select(TaskLedger).where(
+                TaskLedger.trace_id == trace_id, TaskLedger.status == "待验收"
+            )
+        ).scalars().all()
+        accepted = []
+        for row in rows:
+            row.status = "验收通过"
+            accepted.append(row.task_id)
+        if accepted:
+            self.db.commit()
+        return accepted
+
     def mark_dispatch_time(self, task_id: str, when: datetime) -> Optional[TaskLedger]:
         row = self.db.get(TaskLedger, task_id)
         if row is None:

@@ -99,6 +99,7 @@ for inst in $INSTANCES; do
     <string>$label</string>
     <key>ProgramArguments</key>
     <array>
+        <string>/bin/bash</string>
         <string>$WRAPPER</string>
         <string>$inst</string>
     </array>

@@ -367,8 +367,25 @@ def handle_human_confirm_req(db: Session, envelope: Envelope) -> HandlerResult:
 
 @_idempotent
 def handle_human_confirm_resp(db: Session, envelope: Envelope) -> HandlerResult:
+    """人工确认答复（Batch31 起承载「验收通过」）。
+
+    原先只留痕、不推进状态 —— 等于确认完了什么都不发生，于是任务永远停在「待验收」，
+    六步 SOP 的第 5 步（验收）实际是空的：状态枚举里有「验收通过」，但没有任何报文能写它。
+    这里不新增报文类型（8 种是对外契约，加一种就是接口面扩容），只让既有报文说完整话：
+    payload 里显式写 `accept_tasks=true` 才推进，其余情形仍只留痕。
+    """
+    payload = envelope.payload or {}
     archive_id = archive_message(db, envelope)
-    return HandlerResult(archive_id, False, "人工确认答复已记录（仅留痕，不推进状态）")
+    if not payload.get("accept_tasks"):
+        return HandlerResult(archive_id, False, "人工确认答复已记录（仅留痕，不推进状态）")
+
+    repo = LedgerRepository(db)
+    if repo.get_pipeline(envelope.trace_id) is None:
+        raise TaskNotFoundError(f"human_confirm_resp 失败：流水线不存在 {envelope.trace_id}")
+    accepted = repo.accept_pending_tasks(envelope.trace_id)
+    note = f"验收通过 {len(accepted)} 个任务" + (
+        "：" + "、".join(accepted) if accepted else "（没有待验收任务）")
+    return HandlerResult(archive_id, bool(accepted), note)
 
 
 @_idempotent

@@ -90,6 +90,9 @@ class HumanConfirmReqPayload(BaseModel):
 class HumanConfirmRespPayload(BaseModel):
     approved: bool
     comment: str = ""
+    # Batch31：显式声明「这批交付验收通过」，把该流水线下「待验收」任务推到「验收通过」。
+    # 默认 False —— 老调用方不带这个字段，行为仍是只留痕、不推进状态。
+    accept_tasks: bool = False
 
 
 class TaskSummaryPayload(BaseModel):
