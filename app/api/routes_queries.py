@@ -21,6 +21,7 @@ from app.api.schemas_http import (
     TaskPage,
     TaskView,
 )
+from app.core.clock import ensure_utc
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.security import require_token
@@ -47,8 +48,8 @@ def _summary(pipeline) -> PipelineSummary:
         trace_id=pipeline.trace_id,
         original_demand=pipeline.original_demand,
         overall_status=pipeline.overall_status,
-        start_time=pipeline.start_time.isoformat() if pipeline.start_time else None,
-        end_time=pipeline.end_time.isoformat() if pipeline.end_time else None,
+        start_time=ensure_utc(pipeline.start_time).isoformat() if pipeline.start_time else None,
+        end_time=ensure_utc(pipeline.end_time).isoformat() if pipeline.end_time else None,
         pause_flag=pipeline.pause_flag,
     )
 
@@ -184,7 +185,7 @@ def export_trace(
         trace_id=pipeline.trace_id,
         original_demand=pipeline.original_demand,
         overall_status=pipeline.overall_status,
-        start_time=pipeline.start_time.isoformat() if pipeline.start_time else None,
-        end_time=pipeline.end_time.isoformat() if pipeline.end_time else None,
+        start_time=ensure_utc(pipeline.start_time).isoformat() if pipeline.start_time else None,
+        end_time=ensure_utc(pipeline.end_time).isoformat() if pipeline.end_time else None,
         tasks=[_task_view(t) for t in tasks],
     )

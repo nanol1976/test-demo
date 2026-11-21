@@ -893,6 +893,17 @@ def stage_static():
           "插件授权口径" in doc15 and "撤权 > 实例 > 岗位 > 拒" in doc15,
           "授权口径只活在代码里，文档没登记")
 
+    # 1.8l Batch32-4：看板时间不许差 8 小时。流水线时间必须带时区再出去。
+    queries_py = read(os.path.join(ROOT, "app", "api", "routes_queries.py"))
+    check("Batch32-4 流水线时间统一带时区（ensure_utc，不许 naive 直出）",
+          "ensure_utc(pipeline.start_time).isoformat()" in queries_py
+          and "ensure_utc(pipeline.end_time).isoformat()" in queries_py
+          and "pipeline.start_time.isoformat()" not in queries_py,
+          "start_time 还是 naive，看板滞留会多算 8 小时")
+    check("Batch32-4 时间口径写进 07 号文档（哪些 UTC、哪些本地，标清楚）",
+          "附3：时间字段的口径" in read(os.path.join(ROOT, "docs", "base", "07-台账两表字段.md")),
+          "口径只活在代码里")
+
     # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
 
     # 不许各处自己拼 "data/STOP"；worker 只读标记，不写、不删。

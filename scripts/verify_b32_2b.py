@@ -25,7 +25,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
@@ -49,6 +49,16 @@ def _ts(value):
     except ValueError:
         return datetime.min
     return dt if dt.tzinfo else dt.replace(tzinfo=None)
+
+
+def _utc(value):
+    """带时区的串按原样解析（naive 一律当 UTC），给「时间和真实时刻差多少」用。"""
+    text = (value or "").replace("/", "-").replace(" ", "T")
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 def _ordered(snap):
@@ -332,6 +342,20 @@ def main() -> int:
                   f"a={len(page_a)} b={len(page_b)}")
             code, body = request("GET", base + "/api/audit?limit=50&command=plugin:nosuch")
             check("未知插件动作返回空页而不是全量", code == 200 and ((body or {}).get("items") or []) == [])
+
+            print("\n=== 10c) 流水线时间带时区（B32-4：不能让看板白差 8 小时） ===")
+            code, body = request("GET", base + "/api/pipelines?size=2")
+            items_p = (body or {}).get("items") or []
+            stamp = items_p[0].get("start_time") if items_p else ""
+            check("start_time 带时区偏移（不是 naive 本地时间）",
+                  code == 200 and bool(stamp) and
+                  (str(stamp).endswith("+00:00") or str(stamp).endswith("Z")),
+                  str(stamp))
+            skew = None
+            if items_p:
+                skew = abs((datetime.now(timezone.utc) - _utc(stamp)).total_seconds())
+            check("start_time 与真实时刻相差不到 10 分钟（滞留才不会多出 8 小时）",
+                  skew is not None and skew < 600, f"偏差 {skew} 秒" if skew is not None else "没取到流水线")
 
             print("\n=== 11) 接口面仍是 11 条路径 ===")
             code, body = request("GET", base + "/openapi.json")
