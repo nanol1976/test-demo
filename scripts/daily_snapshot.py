@@ -38,6 +38,25 @@ BAD = "#8b2e22"
 MONO = 'Consolas, "Cascadia Mono", "SF Mono", Menlo, "Courier New", monospace'
 
 
+def load_env_token() -> str:
+    """从仓库根的 .env 读 API_TOKEN。
+
+    计划任务/无人值守场景不会继承交互式环境变量，所以这里回退到 .env；
+    只认 API_TOKEN=（API_TOKEN_READONLY= 前缀不同，不会被误取）。
+    """
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(repo_root, ".env")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("API_TOKEN="):
+                    return line.split("=", 1)[1].strip()
+    except Exception:
+        return ""
+    return ""
+
+
 # ──────────────────────────────────────────────────────────────────────
 # HTTP 工具
 # ──────────────────────────────────────────────────────────────────────
@@ -414,7 +433,7 @@ footer {{
 # 正常模式：拉取接口并生成
 # ──────────────────────────────────────────────────────────────────────
 def run_normal(args) -> int:
-    token = args.token or os.environ.get("API_TOKEN", "")
+    token = args.token or os.environ.get("API_TOKEN", "") or load_env_token()
 
     # 拉取三个接口
     # 注意：pipelines 是 {meta, items} 分页包裹，且分页参数是 size（不是 limit）；

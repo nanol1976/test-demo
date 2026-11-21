@@ -414,8 +414,16 @@ def stage_static():
                 "deploy/launch-guard-hidden.vbs", "deploy/explorer-guard.ps1"):
         check(f"部署件在仓库里：{rel}", os.path.exists(os.path.join(ROOT, rel)))
     inst = read(os.path.join(ROOT, "deploy", "install-windows-tasks.ps1"))
-    check("四个计划任务由同一个脚本注册（不许再散落）",
-          all(f'"{n}"' in inst for n in ("MW-Platform", "MW-Worker", "MW-Watchdog", "MW-Guard")))
+    check("计划任务由同一个脚本注册（5 条，不许再散落）",
+          all(f'"{n}"' in inst for n in ("MW-Platform", "MW-Worker", "MW-Watchdog", "MW-Guard", "MW-Snapshot")))
+    # Batch30：快照是"每天一次跑完就走"，不能用常驻任务的每分钟重复触发
+    check("每日快照任务用 Daily 触发（不是每分钟常驻）",
+          "-Daily -At $DailyAt" in inst and "launch-snapshot-hidden.vbs" in inst,
+          "快照任务没进注册脚本或触发写错")
+    snap_vbs = read(os.path.join(ROOT, "deploy", "launch-snapshot-hidden.vbs"))
+    check("每日快照启动器隐藏执行并等待子进程（任务结果才是真的）",
+          "sh.Run cmd, 0, True" in snap_vbs and "daily_snapshot.py" in snap_vbs,
+          "快照启动器缺隐藏运行或不是等子进程")
     check("任务动作是 wscript 跑隐藏 VBS（否则会闪控制台）",
           'Execute "wscript.exe"' in inst and "//nologo" in inst)
     check("安装脚本幂等且有卸载入口", "-Force | Out-Null" in inst and "-Uninstall" in inst)
@@ -583,6 +591,15 @@ def stage_static():
     check("Batch30 每日快照有配套文档",
           os.path.exists(guide14_path) and "daily_snapshot.py" in read(guide14_path),
           "缺 docs/base/14-每日快照.md")
+    # 无人值守要能自己拿口令（计划任务不继承交互式环境变量）
+    check("Batch30 每日快照能自己从 .env 取口令",
+          snap_py and "def load_env_token" in snap_py and "load_env_token()" in snap_py,
+          "没做 .env 回退，计划任务里会 401")
+    # Batch28 起鉴权是两枚开关：冒烟只清一枚就会整片 401（Batch28 的老坑，这里锁死）
+    smoke_py30 = read(os.path.join(ROOT, "scripts", "smoke_http.py"))
+    check("Batch30 冒烟脚本清掉两枚鉴权开关（含 READONLY）",
+          'env["API_TOKEN"] = ""' in smoke_py30 and 'env["API_TOKEN_READONLY"] = ""' in smoke_py30,
+          "smoke_http 只清了一枚开关")
 
     # 1.9 查询契约：关键字与排序走白名单（不许把 sort 直通给 SQL）
     queries_py = read(os.path.join(ROOT, "app", "api", "routes_queries.py"))

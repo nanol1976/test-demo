@@ -52,12 +52,17 @@ $Tasks = @(
     @{ Name = "MW-Watchdog"; Vbs = (Join-Path $Repo "deploy\launch-watchdog-hidden.vbs") },
     @{ Name = "MW-Guard";    Vbs = (Join-Path $Repo "deploy\launch-guard-hidden.vbs") }
 )
+# Batch30：每日快照不是常驻进程，单独一条 Daily 任务（默认 00:05），动作同样是 wscript 跑隐藏 VBS
+$SnapshotTask = @{ Name = "MW-Snapshot"; Vbs = (Join-Path $Repo "deploy\launch-snapshot-hidden.vbs") }
+$DailyAt = "00:05"
+# 预检/卸载要覆盖全部 5 条（含快照），注册仍按常驻 4 条 + 每日 1 条分别处理
+$AllTasks = $Tasks + $SnapshotTask
 
 function Say($m) { Write-Host $m }
 
 # ---------- 卸载 ----------
 if ($Uninstall) {
-    foreach ($t in $Tasks) {
+    foreach ($t in $AllTasks) {
         $old = Get-ScheduledTask -TaskName $t.Name -ErrorAction SilentlyContinue
         if ($null -eq $old) { Say "未注册：$($t.Name)"; continue }
         if ($DryRun) { Say "将注销：$($t.Name)"; continue }
@@ -68,7 +73,7 @@ if ($Uninstall) {
 }
 
 # ---------- 预检 ----------
-foreach ($t in $Tasks) {
+foreach ($t in $AllTasks) {
     if (-not (Test-Path $t.Vbs)) { throw "缺少启动器：$($t.Vbs)" }
 }
 if (-not (Test-Path $Python)) { throw "找不到 Python：$Python（先按文档建 .venv311）" }
@@ -126,9 +131,14 @@ if ($DryRun) {
 }
 
 # ---------- 2) 注册四个任务 ----------
-function New-MwTask($Name, $Vbs) {
-    $Action = New-ScheduledTaskAction -Execute "wscript.exe" `
+# 动作只有一份真相：常驻任务与每日快照都从这里取（verify_b23 会数 wscript.exe 出现次数）
+function New-MwAction($Vbs) {
+    return New-ScheduledTaskAction -Execute "wscript.exe" `
         -Argument "//nologo `"$Vbs`"" -WorkingDirectory $Repo
+}
+
+function New-MwTask($Name, $Vbs) {
+    $Action = New-MwAction $Vbs
     $Trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1)) `
         -RepetitionInterval (New-TimeSpan -Minutes 1) `
         -RepetitionDuration (New-TimeSpan -Days 3650)
@@ -148,6 +158,20 @@ foreach ($t in $Tasks) {
     Register-ScheduledTask -TaskName $t.Name -Action $parts.Action -Trigger $parts.Trigger `
         -Settings $parts.Settings -RunLevel Limited -Force | Out-Null
     Say ("已注册：" + $t.Name)
+}
+
+# ---------- 2b) 每日快照（Batch30）：Daily 触发，跑完即结束，不重复拉起、不重启 ----------
+if ($DryRun) {
+    Say ("将注册：" + $SnapshotTask.Name + " -> 每天 " + $DailyAt + " 跑一次 daily_snapshot.py（输出 data\snapshots）")
+} else {
+    $SnapAction = New-MwAction $SnapshotTask.Vbs
+    $SnapTrigger = New-ScheduledTaskTrigger -Daily -At $DailyAt
+    $SnapSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable -MultipleInstances IgnoreNew `
+        -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+    Register-ScheduledTask -TaskName $SnapshotTask.Name -Action $SnapAction -Trigger $SnapTrigger `
+        -Settings $SnapSettings -RunLevel Limited -Force | Out-Null
+    Say ("已注册：" + $SnapshotTask.Name + "（每天 " + $DailyAt + "）")
 }
 
 # ---------- 3) 可选：立刻拉起来 ----------

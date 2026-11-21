@@ -84,6 +84,7 @@ def main() -> int:
     env["DATABASE_URL"] = f"sqlite:///{DB}"
     env["ARCHIVE_ROOT"] = ARCHIVE
     env["API_TOKEN"] = ""
+    env["API_TOKEN_READONLY"] = ""  # Batch28 起是两枚开关，只清一枚会让冒烟吃 401
     env["SCAN_INTERVAL_SECONDS"] = "3600"
 
     # 注意：不先建表 —— 就是要验「空库启动自检」能不能兜住
