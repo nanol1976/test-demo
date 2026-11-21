@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import py_compile
 import struct
 import sys
 import tempfile
+import urllib.request
 import zlib
 from datetime import datetime
 from pathlib import Path
@@ -391,6 +393,21 @@ def probe_social() -> Probe:
 
 
 # ---------------------------------------------------------------- 软件开发
+def _api_openapi_paths() -> tuple[list[str] | None, str]:
+    """本机没装平台依赖时，退一步问正在跑的平台的 /openapi.json。
+
+    这比"skip"有用：验证的是线上真实接口面，而不是仓库里的代码长什么样。
+    地址取 MWP_BASE_URL（Mac 的 worker.env 里就有），没设就用局域网默认。
+    """
+    base = (os.environ.get("MWP_BASE_URL") or "http://192.168.0.106:8000").rstrip("/")
+    try:
+        with urllib.request.urlopen(base + "/openapi.json", timeout=6) as r:
+            doc = json.loads(r.read().decode("utf-8"))
+        return [p for p in doc.get("paths", {}) if not p.startswith("/static")], base
+    except Exception as e:  # 网络不通/平台没起，都算拿不到
+        return None, f"{base}：{e}"
+
+
 def probe_dev() -> Probe:
     p = Probe("dev", "软件开发：语法、接口面与迁移链")
 
@@ -411,10 +428,15 @@ def probe_dev() -> Probe:
             sys.path.insert(0, str(ROOT))
         from app.main import app  # noqa: WPS433
         paths = [x for x in app.openapi()["paths"] if not x.startswith("/static")]
-        p.expect("接口路径数 = 11（未私自扩容）", len(paths) == 11, f"{len(paths)} 条：{sorted(paths)}")
-    except ImportError as e:
-        # 只装 worker 依赖的机器（Mac 那台）本就没有 fastapi —— 如实跳过，不算过也不算败
-        p.skip("接口路径数 = 11（未私自扩容）", f"本机未装平台依赖：{e}")
+        p.expect("接口路径数 = 11（未私自扩容）", len(paths) == 11, f"本地生成 {len(paths)} 条")
+    except ImportError:
+        # 只装 worker 依赖的机器（Mac 那台）没有 fastapi —— 改为向运行中的平台取
+        paths, where = _api_openapi_paths()
+        if paths is None:
+            p.skip("接口路径数 = 11（未私自扩容）", f"本机无平台依赖，且平台取不到：{where}")
+        else:
+            p.expect("接口路径数 = 11（未私自扩容）", len(paths) == 11,
+                     f"经线上 {where} 读到 {len(paths)} 条")
     except Exception as e:  # pragma: no cover
         p.bad("接口路径数 = 11（未私自扩容）", f"openapi 生成失败：{e}")
 

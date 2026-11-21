@@ -325,6 +325,18 @@ def stage_static():
             detail_roles = (rp.stdout or rp.stderr or "")[:160]
         check("五业务方向探针实跑全过（离线可判）", ok_roles, detail_roles)
 
+    # 1.5b6 Batch31-E 遗留处置：滞留单的人工收尾工具必须默认演练、且有年龄闸门
+    close_path = os.path.join(ROOT, "scripts", "close_stale.py")
+    check("滞留流水线有人工收尾工具", os.path.exists(close_path))
+    if os.path.exists(close_path):
+        ct = read(close_path)
+        check("收尾工具默认演练（无 --apply 不写库）",
+              'add_argument("--apply"' in ct and "if not args.apply" in ct)
+        check("收尾工具有 24h 年龄闸门（防手滑关掉在跑的单）",
+              "min-age-hours" in ct and "min_age_hours" in ct)
+        check("收尾工具只推进状态、不删行",
+              "delete(" not in ct.lower() and "update_task_status" in ct)
+
     # 1.5b3 执行方在线视图红线（Batch12）：靠任务心跳推断，不新增接口
     model_py = read(os.path.join(ROOT, "app", "models", "__init__.py"))
     check("台账有 last_heartbeat_time 列", "last_heartbeat_time" in model_py, "缺列")
