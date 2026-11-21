@@ -83,7 +83,8 @@ def tail_of(out, n=3, width=160):
 
 
 def check(label, ok, detail=""):
-    print(f"  [{'PASS' if ok else 'FAIL'}] {label}" + (f" — {detail}" if detail else ""))
+    # detail 是「失败原因」的措辞，PASS 时打出来只会让人误读成问题，所以只在 FAIL 时显示
+    print(f"  [{'PASS' if ok else 'FAIL'}] {label}" + (f" — {detail}" if detail and not ok else ""))
     if not ok:
         FAILS.append(label)
     return ok
@@ -697,6 +698,58 @@ def stage_static():
               "不加路径" in d16, "设计稿没说接口面不动")
     idx00 = read(os.path.join(ROOT, "docs", "base", "00-索引目录.md"))
     check("Batch32 设计稿在索引里登记过", "16-异构复核与插件沉淀" in idx00)
+
+    # 1.8h Batch32-1：异构复核落地的四条防作弊，一条都不许回退。
+    # 红线守的是「方向」：复核由别人做、标准逐条答满、结论只写一次、unreviewed 不放行。
+    migrate_dir = os.path.join(ROOT, "migrations", "versions")
+    check("Batch32-1 迁移 v011 在位", os.path.exists(os.path.join(migrate_dir, "v011_task_review.py")))
+    model32 = read(os.path.join(ROOT, "app", "models", "__init__.py"))
+    check("Batch32-1 台账三列齐全（review_of / review_verdict / review_items）",
+          all(k in model32 for k in ("review_of", "review_verdict", "review_items")), "缺列")
+    dispatch32 = read(os.path.join(ROOT, "app", "services", "dispatch.py"))
+    check("Batch32-1 回执后自动派生复核单",
+          "def _spawn_review" in dispatch32 and "task.task_id}-rv" in dispatch32)
+    check("Batch32-1 复核者 ≠ 执行者（同实例不建单、标 unreviewed）",
+          "复核者与执行者同实例" in dispatch32 and '"unreviewed"' in dispatch32,
+          "防作弊第 1 条没落地")
+    check("Batch32-1 复核单不再派生复核单（review_of 非空即跳过）",
+          "复核单不再派生复核单" in dispatch32
+          and 'getattr(task, "review_of", None)' in dispatch32,
+          "防作弊第 2 条没落地")
+    check("Batch32-1 条数必须对齐（少一条即 fail，且点出缺失编号）",
+          "def _evaluate" in dispatch32 and "缺失项" in dispatch32, "防作弊第 3 条没落地")
+    check("Batch32-1 结论只写一次（二次回执 409）",
+          "复核结论已写入" in dispatch32 and "不允许改写" in dispatch32, "防作弊第 4 条没落地")
+    ledger32 = read(os.path.join(ROOT, "app", "repositories", "ledger.py"))
+    check("Batch32-1 签收闸门（只推 pass/null，unreviewed 需 force_accept）",
+          'verdict == "unreviewed" and not force_accept' in ledger32
+          and 'verdict == "fail"' in ledger32, "闸门没加，签收会把没人审的活混过去")
+    check("Batch32-1 复核结论只写一次的仓储层实现",
+          "def set_review_verdict" in ledger32 and "return False" in ledger32,
+          "缺「已定案不覆盖」分支")
+    check("Batch32-1 挑复核者的排序口径写死（排除执行者 + 在线 + 最闲）",
+          "def pick_reviewer" in ledger32 and "in_flight" in ledger32)
+    review_py = os.path.join(ROOT, "scripts", "task_review.py")
+    check("Batch32-1 规则复核脚本在位", os.path.exists(review_py))
+    if os.path.exists(review_py):
+        rt = read(review_py)
+        check("Batch32-1 规则复核脚本纯标准库且离线可判",
+              "import argparse" in rt and "--review-b64" in rt and "def judge" in rt
+              and "import subprocess" not in rt, "脚本引了不该引的东西")
+    http32 = read(os.path.join(ROOT, "app", "api", "schemas_http.py"))
+    check("Batch32-1 TaskView 三字段（接口路径不变，只是返回体变厚）",
+          all(k in http32 for k in ("review_of", "review_verdict", "review_items")))
+    msg32 = read(os.path.join(ROOT, "app", "api", "routes_messages.py"))
+    check("Batch32-1 TaskView 三个字段真的填值（不是只声明）",
+          "review_items=_review_items(task)" in msg32)
+    js32 = read(os.path.join(ROOT, "app", "static", "app.js"))
+    check("Batch32-1 看板有复核列（unreviewed 一眼可见）",
+          "function renderReview" in js32 and '"review"' in js32, "前端没有复核列")
+    css32 = read(os.path.join(ROOT, "app", "static", "style.css"))
+    check("Batch32-1 复核章有样式（pass/fail/warn 三色分开）",
+          ".rv-chip.rv-pass" in css32 and ".rv-chip.rv-fail" in css32 and ".rv-chip.rv-warn" in css32)
+    run_all32 = read(os.path.join(ROOT, "scripts", "run_all.py"))
+    check("Batch32-1 验收脚本进全量测试清单", "verify_b32.py" in run_all32)
 
     # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
     # 不许各处自己拼 "data/STOP"；worker 只读标记，不写、不删。

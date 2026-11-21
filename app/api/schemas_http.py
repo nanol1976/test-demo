@@ -31,6 +31,13 @@ class TaskView(BaseModel):
     target_instance: Optional[str] = None
     # Batch31-D：实际由哪个岗位完成（回执未带 instance_id 时为 None）
     done_instance: Optional[str] = None
+    # Batch32-1：异构复核（字段不是路径——接口仍是 11 条，只是返回体多三个字段）
+    # review_of：本行是复核单时指向被复核的 task_id
+    review_of: Optional[str] = None
+    # review_verdict：被复核任务的结论 pass / fail / unreviewed
+    review_verdict: Optional[str] = None
+    # review_items：逐项结论（原文 JSON 解析后的数组）
+    review_items: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class PipelineView(BaseModel):

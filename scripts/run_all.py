@@ -48,6 +48,7 @@ SCRIPTS = [
     ("Batch27 手机访问：绑定可配 + token + 窄屏", "verify_b27.py"),
     ("Batch28 只读口令：能看不能动", "verify_b28.py"),
     ("Batch29 优雅停止：标记文件 + worker 认领", "verify_b29.py"),
+    ("Batch32-1 异构复核：派生/逐项/闸门/只写一次", "verify_b32.py"),
 ]
 
 

@@ -2,7 +2,7 @@
 
 铁律：只允许追加与状态更新，任何删除/清空/批量覆盖都不提供。
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -245,6 +245,7 @@ class LedgerRepository:
         is_high_risk: bool = False,
         status: str = "待拆解",
         target_instance: Optional[str] = None,
+        review_of: Optional[str] = None,
     ) -> TaskLedger:
         if status not in TASK_STATUSES:
             raise ValueError(f"非法任务状态: {status}")
@@ -258,6 +259,7 @@ class LedgerRepository:
             remaining_retry=max_retry,
             is_high_risk=is_high_risk,
             depends_on=list(depends_on or []),
+            review_of=review_of,
         )
         self.db.add(row)
         try:
@@ -290,12 +292,17 @@ class LedgerRepository:
         self.db.refresh(row)
         return row
 
-    def accept_pending_tasks(self, trace_id: str) -> List[str]:
-        """把一条流水线下所有「待验收」任务推到「验收通过」，返回被推进的 task_id。
+    def accept_pending_tasks(self, trace_id: str, force_accept: bool = False) -> List[str]:
+        """把一条流水线下的「待验收」任务推到「验收通过」，返回被推进的 task_id。
 
         Batch31：协议里 7 种报文没有一种能写「验收通过」—— 任务回传后永远停在「待验收」，
         六步 SOP 的第 5 步（验收）实际是空的。这里只做状态推进（台账铁律允许），
         不新增报文类型，由既有的 task_summary 在 Master 显式声明 accept_tasks 时调用。
+
+        Batch32-1 起加一道闸门：只推 `review_verdict ∈ {pass, None}` 的任务。
+        - `fail` 的单在驳回时就已离开「待验收」，正常走不到这里（留着这行是双保险）；
+        - `unreviewed`（没找到合格复核者）的單必须显式 `force_accept=True` 才推，
+          否则等于把"没人审过"的活混进"审过了"里。
         """
         rows = self.db.execute(
             select(TaskLedger).where(
@@ -304,6 +311,11 @@ class LedgerRepository:
         ).scalars().all()
         accepted = []
         for row in rows:
+            verdict = getattr(row, "review_verdict", None)
+            if verdict == "fail":
+                continue
+            if verdict == "unreviewed" and not force_accept:
+                continue
             row.status = "验收通过"
             accepted.append(row.task_id)
         if accepted:
@@ -379,6 +391,63 @@ class LedgerRepository:
         self.db.commit()
         self.db.refresh(row)
         return row
+
+    # ---- Batch32-1：异构复核 ----
+    def pick_reviewer(self, exclude_instance: Optional[str]) -> Optional[tuple]:
+        """挑复核者：在线、不是执行者本人、当前在跑的活最少。
+
+        排序口径写死（防"随便挑一个在线就行"）：
+          1) 排除 `exclude_instance`（执行者实例）——复核不能自己审自己；
+          2) 只算 `status=running` 且最近心跳在 `heartbeat_timeout_seconds` 内的；
+          3) 按 `in_flight` 升序，忙闲相同时取 `last_seen` 最新的（刚报过心跳的更可信）。
+        返回 (worker_id, instance_id)；一个都不合格返回 None（调用方标 unreviewed）。
+        """
+        from app.core.clock import ensure_utc
+        from app.core.config import get_settings
+        from app.models import WorkerRegistry
+
+        timeout = int(get_settings().heartbeat_timeout_seconds)
+        now = datetime.now(timezone.utc)
+        rows = self.db.execute(select(WorkerRegistry)).scalars().all()
+        cands = []
+        for row in rows:
+            if exclude_instance and row.instance_id == exclude_instance:
+                continue
+            if row.status != "running":
+                continue
+            age = (now - ensure_utc(row.last_seen)).total_seconds()
+            if age > timeout:
+                continue
+            cands.append(row)
+        if not cands:
+            return None
+        best = sorted(
+            cands,
+            key=lambda r: (int(r.in_flight), -ensure_utc(r.last_seen).timestamp()),
+        )[0]
+        return best.worker_id, best.instance_id
+
+    def set_review_verdict(
+        self, task_id: str, verdict: str, items_json: Optional[str] = None
+    ) -> bool:
+        """把复核结论写进被复核的任务：只写一次。
+
+        返回 True = 本次写成功；False = 任务不存在，或已有结论（不得改写）。
+        「只写一次」是防作弊的第 4 条：复核结论一旦落账，任何后续回执都不许覆盖。
+        """
+        if verdict not in {"pass", "fail", "unreviewed"}:
+            raise ValueError(f"非法复核结论: {verdict}")
+        row = self.db.get(TaskLedger, task_id)
+        if row is None:
+            return False
+        if getattr(row, "review_verdict", None):
+            return False
+        row.review_verdict = verdict
+        if items_json is not None:
+            row.review_items = items_json
+        self.db.commit()
+        self.db.refresh(row)
+        return True
 
     def record_reject(self, task_id: str, reason: str) -> Optional[TaskLedger]:
         row = self.db.get(TaskLedger, task_id)

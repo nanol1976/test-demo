@@ -95,6 +95,9 @@ class HumanConfirmRespPayload(BaseModel):
     # Batch31：显式声明「这批交付验收通过」，把该流水线下「待验收」任务推到「验收通过」。
     # 默认 False —— 老调用方不带这个字段，行为仍是只留痕、不推进状态。
     accept_tasks: bool = False
+    # Batch32-1：`unreviewed`（没找到合格复核者）的单要显式覆盖才推，留痕用。
+    # 只对 review_verdict=unreviewed 起作用；已 pass 的单不需要它。
+    force_accept: bool = False
 
 
 class TaskSummaryPayload(BaseModel):

@@ -128,6 +128,14 @@ class TaskLedger(Base):
     target_instance: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     # Batch31-D：实际由哪个岗位完成（回执 metadata.instance_id 落库，可空）。
     done_instance: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Batch32-1：本行是复核单时指向被复核的 task_id；普通任务为空。
+    # 用它同时当「不递归」的开关：review_of 非空的单不再派生复核单。
+    review_of: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Batch32-1：被复核任务的结论 pass / fail / unreviewed（复核单自身为空）。
+    # 判据只写一次：非空即已定案，二次回执一律 409（防被静默改写）。
+    review_verdict: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    # Batch32-1：逐项结论 JSON（[{"id":"c1","ok":true,"evidence":"..."}]），原文可追溯。
+    review_items: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     pipeline: Mapped["PipelineLedger"] = relationship("PipelineLedger", back_populates="tasks")
 

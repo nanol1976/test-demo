@@ -391,3 +391,23 @@ textarea {
 }
 .role-chip.role-qa   { border-color: var(--stamp); color: var(--stamp); }
 .role-chip.role-mgmt { border-color: var(--ink); color: var(--ink); }
+
+/* Batch32-1：复核章。与岗位章同一套视觉语言（细边、2px 圆角、小字），
+   颜色只借既有的三支笔：stamp=过、bad=未过、warn=没人审。 */
+.rv-chip {
+  display: inline-block;
+  padding: 1px 6px 2px;
+  font-size: 11px;
+  line-height: 1.5;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: var(--pan-2);
+  color: var(--ink);
+  white-space: nowrap;
+}
+.rv-chip.rv-pass { border-color: var(--stamp); color: var(--stamp); }
+.rv-chip.rv-fail { border-color: var(--bad); color: var(--bad); }
+.rv-chip.rv-warn { border-color: var(--warn); color: var(--warn); }
+.rv-chip.rv-self { border-style: dashed; color: var(--ink); }
+/* Batch32 补：任务表第一列是 id，换行会把 t-b32rv-neg 拆成三行，钉住不折 */
+#taskTableWrap td:first-child { white-space: nowrap; }

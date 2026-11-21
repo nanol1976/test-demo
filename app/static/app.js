@@ -388,7 +388,7 @@ function renderDetail(p) {
   if (!table) {
     wrap.innerHTML = "";
     table = document.createElement("table");
-    table.innerHTML = "<thead><tr><th>task_id</th><th>状态</th><th>执行方</th><th>派发时间</th><th>重试</th><th>依赖</th><th>原因</th></tr></thead>";
+    table.innerHTML = "<thead><tr><th>task_id</th><th>状态</th><th>执行方</th><th>派发时间</th><th>重试</th><th>依赖</th><th>复核</th><th>原因</th></tr></thead>";
     table.appendChild(document.createElement("tbody"));
     wrap.appendChild(table);
   }
@@ -420,12 +420,40 @@ function buildTaskRow(t) {
   const row = document.createElement("tr");
   row.dataset.task = t.task_id;
   const cells = {};
-  ["id", "status", "worker", "dispatch", "retry", "deps", "reason"].forEach((k) => {
+  ["id", "status", "worker", "dispatch", "retry", "deps", "review", "reason"].forEach((k) => {
     cells[k] = document.createElement("td");
     row.appendChild(cells[k]);
   });
   cells.id.appendChild(text(t.task_id, "mono"));
   return { row, cells, last: { id: t.task_id } };
+}
+
+/* Batch32-1：复核列。一个格子里只放三种东西之一：
+   - 复核单：本行是 <task_id>-rv，标「复核单」并提示审的是谁；
+   - 结论章：pass（绿）/ fail（红）/ unreviewed（黄，无人复核，签收要 force_accept）；
+   - 空白：老任务没有标准，保持原样（不显示「—」以外的噪音）。 */
+function renderReview(td, t) {
+  if (t.review_of) {
+    const b = document.createElement("span");
+    b.className = "rv-chip rv-self";
+    b.textContent = "复核单";
+    b.title = `复核 ${t.review_of}`;
+    td.appendChild(b);
+    return;
+  }
+  const v = t.review_verdict;
+  if (!v) return;
+  const b = document.createElement("span");
+  b.className = "rv-chip " + (v === "pass" ? "rv-pass" : v === "fail" ? "rv-fail" : "rv-warn");
+  b.textContent = v === "unreviewed" ? "无人复核" : v;
+  const items = t.review_items || [];
+  if (items.length) {
+    const bad = items.filter((x) => x && !x.ok).map((x) => x.id || "?").join("、");
+    b.title = `${items.length} 项` + (bad ? `，未过：${bad}` : "，全部通过");
+  } else {
+    b.title = "逐项结论未落库";
+  }
+  td.appendChild(b);
 }
 
 function updateTaskRow(rec, t) {
@@ -445,6 +473,13 @@ function updateTaskRow(rec, t) {
   if (rec.last.retry !== retry) { rec.last.retry = retry; setCellText(rec.cells.retry, retry); }
   const deps = (t.depends_on || []).join(", ") || "—";
   if (rec.last.deps !== deps) { rec.last.deps = deps; setCellText(rec.cells.deps, deps); }
+  // Batch32-1：复核列——复核单 / 结论章 / 逐项条数，三样都在这一个格子里
+  const rvKey = `${t.review_of || ""}|${t.review_verdict || ""}|${(t.review_items || []).length}`;
+  if (rec.last.rv !== rvKey) {
+    rec.last.rv = rvKey;
+    rec.cells.review.innerHTML = "";
+    renderReview(rec.cells.review, t);
+  }
   const reason = t.abort_reason || t.reject_reason || "—";
   if (rec.last.reason !== reason) { rec.last.reason = reason; setCellText(rec.cells.reason, reason); }
 }

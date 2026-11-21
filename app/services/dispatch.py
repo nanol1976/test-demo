@@ -5,9 +5,10 @@
 - 不做 DAG 拆解、不做验收判定、不做审批决策、不做超时控制；
 - 所有写操作一律走 LedgerRepository，禁止在这里写 SQL 或自建 Session。
 """
+import base64
 import json
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -342,19 +343,253 @@ def handle_task_heartbeat(db: Session, envelope: Envelope) -> HandlerResult:
     return HandlerResult(archive_id, False, "心跳已记录（不改状态，超时判定属 Batch4）")
 
 
+# ---------------------------------------------------------------- Batch32-1 异构复核
+
+def _criteria_of(task) -> List[str]:
+    """从任务的派发载荷里取验收标准（原样，不做业务解释）。"""
+    try:
+        data = json.loads(task.dispatch_payload or "{}")
+    except (TypeError, ValueError):
+        return []
+    crit = data.get("acceptance_criteria")
+    if not isinstance(crit, list):
+        return []
+    return [str(c) for c in crit if str(c).strip()]
+
+
+def _criteria_ids(n: int) -> List[str]:
+    return [f"c{i + 1}" for i in range(n)]
+
+
+def _parse_review_verdict(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """从复核回执里取逐项结论。
+
+    两条来源，按可信度取：
+      1) `payload.output.result` —— Worker 若把 stdout 解析成 JSON 会放这里；
+      2) `payload.logs` —— 规则复核脚本固定只打一行 JSON，2000 字符尾截断也放得下。
+    两处都取不到就返回 None，由调用方判 fail：没有逐项结论本身就不合格。
+    """
+    out = payload.get("output") or {}
+    if isinstance(out, dict) and isinstance(out.get("result"), dict):
+        return out["result"]
+    logs = (payload.get("logs") or "").strip()
+    if logs:
+        try:
+            data = json.loads(logs)
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            return data
+    return None
+
+
+def _evaluate(items, criteria: List[str]) -> tuple:
+    """逐项对照标准，返回 (verdict, items_json, reason)。
+
+    三条硬判据（设计稿 3.4）：
+      ① 条数必须相等：少一条就说明标准没被逐条回答 → fail；
+      ② 任一项 ok=false → fail，理由带该项编号；
+      ③ 缺项理由必须点出编号（c3 之类），重派时才知道缺什么。
+    """
+    ids = _criteria_ids(len(criteria))
+    if not isinstance(items, list):
+        return "fail", None, "复核回执里没有逐项结论（items 缺失）"
+    if len(items) != len(criteria):
+        got = [str((it or {}).get("id") or "") if isinstance(it, dict) else "" for it in items]
+        missing = [cid for cid in ids if cid not in got]
+        extra = [g for g in got if g and g not in ids]
+        reason = (
+            f"逐项结论 {len(items)} 条 ≠ 验收标准 {len(criteria)} 条"
+            + (f"；缺失项：{'、'.join(missing)}" if missing else "")
+            + (f"；多出项：{'、'.join(extra)}" if extra else "")
+        )
+        return "fail", json.dumps(items, ensure_ascii=False), reason
+    failed = []
+    for cid, it in zip(ids, items):
+        if not isinstance(it, dict):
+            failed.append(f"{cid}(结论不是对象)")
+            continue
+        if not bool(it.get("ok")):
+            why = str(it.get("reason") or "").strip()
+            failed.append(f"{cid}：{why}" if why else f"{cid}：未通过")
+    if failed:
+        return "fail", json.dumps(items, ensure_ascii=False), "复核未通过 — " + "；".join(failed)
+    return "pass", json.dumps(items, ensure_ascii=False), ""
+
+
+def _spawn_review(db: Session, repo: LedgerRepository, task, payload: Dict[str, Any]) -> str:
+    """有验收标准 → 派生一条复核单，派给「不是执行者」的在线实例。
+
+    失败一律不阻断原单回传（原单照样落「待验收」），但结论如实写进 note 与台账字段，
+    不做静默处理。返回一句说明，拼进回执 note。
+    """
+    # 标准在**派发载荷**里（不是回执载荷）：回执只说"我干完了"，标准得回原单上取
+    criteria = _criteria_of(task)
+    if not criteria:
+        return ""
+    criteria = [str(c) for c in criteria if str(c).strip()]
+    if not criteria:
+        return ""
+    if getattr(task, "review_of", None):
+        return ""                       # 复核单不再派生复核单（不递归）
+    if getattr(task, "review_verdict", None):
+        return "（已有复核结论，未重复派生）"
+
+    review_id = f"{task.task_id}-rv"
+    if repo.get_task(review_id) is not None:
+        return "（复核单已存在，未重复派生）"
+
+    done = getattr(task, "done_instance", None)
+    artifacts = ((payload.get("output") or {}).get("artifacts")) or []
+    if not isinstance(artifacts, list):
+        artifacts = []
+    # 证据只留路径与是否存在，不搬运大对象
+    artifacts = [
+        {"path": a.get("path"), "exists": bool(a.get("exists"))}
+        for a in artifacts if isinstance(a, dict)
+    ]
+
+    requested = payload.get("reviewer")
+    if not isinstance(requested, str) or not requested.strip():
+        # 回执报文按 schema 收敛，顶层自定义字段会被丢掉；metadata 是透传字典，放这里
+        meta = payload.get("metadata") or {}
+        requested = meta.get("reviewer") if isinstance(meta, dict) else None
+    reviewer = None
+    if isinstance(requested, str) and requested.strip():
+        requested = requested.strip()
+        if done and requested == done:
+            # 复核者 = 执行者本人 → 不建单，标 unreviewed（防作弊第 1 条）
+            repo.set_review_verdict(task.task_id, "unreviewed")
+            logger.warning("review 复核者与执行者同实例 task=%s instance=%s",
+                           task.task_id, requested)
+            return f"（复核者与执行者同为 {requested}，未建复核单，任务标 unreviewed）"
+        if repo.worker_registered(task.target_worker, requested):
+            reviewer = (task.target_worker, requested)
+    if reviewer is None:
+        reviewer = repo.pick_reviewer(done)
+
+    if reviewer is None:
+        repo.set_review_verdict(task.task_id, "unreviewed")
+        return "（无合格复核者：需在线且不是执行者本人，任务标 unreviewed；签收需 force_accept）"
+
+    ctx = {
+        "review_of": task.task_id,
+        "criteria": criteria,
+        "artifacts": artifacts,
+        "self_check": ((payload.get("metadata") or {}).get("self_check") or ""),
+    }
+    ctx_json = json.dumps(ctx, ensure_ascii=False, sort_keys=True, default=str)
+    b64 = base64.urlsafe_b64encode(ctx_json.encode("utf-8")).decode("ascii")
+
+    review_payload = {
+        "task_goal": f"复核 {task.task_id}：逐条核对 {len(criteria)} 条验收标准",
+        "target_worker": task.target_worker,
+        "target_instance": reviewer[1],
+        "max_retry": 1,
+        # 复核单自身不带标准：否则会再派生一层复核，评审链无限延长
+        "acceptance_criteria": [],
+        "review_context": ctx,
+        "exec": {
+            # 规则复核：纯标准库、秒级、离线可判。判的是「标准有没有被逐条答满」，
+            # 不是「活干得好不好」——后者归人签收。
+            "script": "scripts/task_review.py",
+            "args": ["--review-b64", b64],
+            "timeout_seconds": 120,
+        },
+    }
+    repo.create_task(
+        trace_id=task.trace_id,
+        task_id=review_id,
+        target_worker=task.target_worker,
+        status="执行中",
+        max_retry=1,
+        target_instance=reviewer[1],
+        review_of=task.task_id,
+    )
+    repo.record_dispatch(
+        review_id,
+        datetime.now().astimezone(),
+        payload_json=_payload_json(review_payload),
+        target_worker=task.target_worker,
+        target_instance=reviewer[1],
+    )
+    logger.info("review 派生 %s -> %s（原单 %s）", review_id, reviewer[1], task.task_id)
+    return f"（已派生复核单 {review_id}，复核者 {reviewer[1]}）"
+
+
+def _finish_review(db: Session, repo: LedgerRepository, review_task,
+                   envelope: Envelope, archive_id: int, payload: Dict[str, Any]) -> HandlerResult:
+    """复核单回执：写结论 → pass 留「待验收」/ fail 驳回原单。"""
+    original = repo.get_task(review_task.review_of)
+    if original is None:
+        repo.update_task_status(review_task.task_id, "验收通过")
+        return HandlerResult(archive_id, True, "复核单已回传，但被复核任务不存在（结论无处可落）")
+    if getattr(original, "review_verdict", None):
+        # 结论只写一次（防作弊第 4 条）：二次回执一律拒绝，不动任何状态
+        raise IllegalTransitionError(
+            f"复核结论已写入（{original.review_verdict}），不允许改写：{original.task_id}"
+        )
+
+    criteria = _criteria_of(original)
+    verdict = _parse_review_verdict(payload)
+    items = (verdict or {}).get("items") if isinstance(verdict, dict) else None
+    result, items_json, reason = _evaluate(items, criteria)
+
+    repo.set_review_verdict(original.task_id, result, items_json)
+    repo.update_task_status(review_task.task_id, "验收通过")
+
+    if result == "pass":
+        logger.info("review pass task=%s reviewer=%s",
+                    original.task_id, review_task.done_instance)
+        return HandlerResult(
+            archive_id, True,
+            f"复核通过（{len(criteria)} 条标准逐项答满）；原单 {original.task_id} 保持「待验收」，等签收",
+        )
+
+    repo.record_reject(original.task_id, reason[:1000])
+    remaining = repo.get_task(original.task_id).remaining_retry
+    if remaining <= 0:
+        repo.update_task_status(original.task_id, "执行失败")
+        return HandlerResult(
+            archive_id, True,
+            f"复核未通过：{reason[:200]}；重试已耗尽，原单转「执行失败」",
+        )
+    repo.update_task_status(original.task_id, "验收驳回")
+    return HandlerResult(
+        archive_id, True,
+        f"复核未通过：{reason[:200]}；原单 {original.task_id} 转「验收驳回」，剩余重试 {remaining}",
+    )
+
+
 @_idempotent
 def handle_task_return(db: Session, envelope: Envelope) -> HandlerResult:
     repo = LedgerRepository(db)
     task = _require_task(repo, envelope.task_id, "task_return")
     _require_same_trace(task, envelope, "task_return")
     _require_owner(task, envelope, "task_return")
+    # 复核结论只写一次：复核单已「验收通过」、原单也已有结论时，先报"不许改写"，
+    # 别让人以为是"状态不对"（两种错因要能一眼分清）。
+    if getattr(task, "review_of", None):
+        original = repo.get_task(task.review_of)
+        if original is not None and getattr(original, "review_verdict", None):
+            raise IllegalTransitionError(
+                f"复核结论已写入（{original.review_verdict}），不允许改写：{original.task_id}"
+            )
     _require_status(task, TASK_RETURN_FROM, "task_return")
 
+    payload: Dict[str, Any] = envelope.payload or {}
     archive_id = archive_message(db, envelope)
     repo.mark_return_time(envelope.task_id, envelope.timestamp)
     # Batch31-D：回执带来 instance_id 就落「实际执行岗位」；老 Worker 不带则留空（不阻断）
-    meta = (envelope.payload or {}).get("metadata") or {}
+    meta = payload.get("metadata") or {}
     done_instance = meta.get("instance_id") if isinstance(meta, dict) else None
+
+    # Batch32-1：复核单回执不落「待验收」，先把结论写给被复核任务
+    if getattr(task, "review_of", None):
+        if isinstance(done_instance, str) and done_instance.strip():
+            repo.mark_done_instance(envelope.task_id, done_instance.strip())
+        return _finish_review(db, repo, task, envelope, archive_id, payload)
+
     if isinstance(done_instance, str) and done_instance.strip():
         repo.mark_done_instance(envelope.task_id, done_instance.strip())
     repo.update_task_status(envelope.task_id, "待验收")
@@ -366,6 +601,9 @@ def handle_task_return(db: Session, envelope: Envelope) -> HandlerResult:
             "task_return 岗位不符 task=%s 指定=%s 实际=%s",
             envelope.task_id, task.target_instance, done_instance.strip(),
         )
+    # 有验收标准就派生复核单：验收从「人拍板」变成「规则复核 + 人签收」
+    db.refresh(task)
+    note += _spawn_review(db, repo, task, payload)
     return HandlerResult(archive_id, True, note)
 
 
@@ -432,9 +670,16 @@ def handle_human_confirm_resp(db: Session, envelope: Envelope) -> HandlerResult:
     repo = LedgerRepository(db)
     if repo.get_pipeline(envelope.trace_id) is None:
         raise TaskNotFoundError(f"human_confirm_resp 失败：流水线不存在 {envelope.trace_id}")
-    accepted = repo.accept_pending_tasks(envelope.trace_id)
+    pending = repo.count_tasks_by_status_in_trace(envelope.trace_id, "待验收")
+    # Batch32-1：签收闸门——unreviewed 的单要显式 force_accept 才推
+    accepted = repo.accept_pending_tasks(
+        envelope.trace_id, force_accept=bool(payload.get("force_accept"))
+    )
     note = f"验收通过 {len(accepted)} 个任务" + (
-        "：" + "、".join(accepted) if accepted else "（没有待验收任务）")
+        "：" + "、".join(accepted) if accepted else "（没有可签收的任务）")
+    blocked = pending - len(accepted)
+    if blocked > 0:
+        note += f"；另有 {blocked} 个「待验收」被复核闸门拦下（unreviewed，需 force_accept=true）"
     return HandlerResult(archive_id, bool(accepted), note)
 
 

@@ -81,6 +81,18 @@ def _task_payload(task) -> Optional[Dict[str, Any]]:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _review_items(task) -> list:
+    """Batch32-1：把台账里的逐项结论原文解析成数组（坏数据当空，不抛）。"""
+    raw = getattr(task, "review_items", None)
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return data if isinstance(data, list) else []
+
+
 def _task_view(task) -> TaskView:
     return TaskView(
         task_id=task.task_id,
@@ -100,6 +112,9 @@ def _task_view(task) -> TaskView:
                              if task.last_heartbeat_time else None),
         target_instance=getattr(task, "target_instance", None),
         done_instance=getattr(task, "done_instance", None),
+        review_of=getattr(task, "review_of", None),
+        review_verdict=getattr(task, "review_verdict", None),
+        review_items=_review_items(task),
     )
 
 
