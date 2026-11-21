@@ -123,6 +123,9 @@ button.primary {
 }
 button.primary:hover { background: var(--stamp-ink); border-color: var(--stamp-ink); }
 button.ghost { background: transparent; }
+/* Batch30：优雅停止——印册里的告警色，只描边不填底，别跟"主操作"抢眼 */
+button.btn-warn { border-color: var(--warn); color: var(--warn); }
+button.btn-warn:hover { background: var(--pan); border-color: var(--warn); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 
 /* ---------- 版式：一张纸，左主栏 + 右附页 ---------- */

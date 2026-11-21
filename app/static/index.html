@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Master-Worker 台账看板</title>
-<link rel="stylesheet" href="/static/style.css?v=b28">
+<link rel="stylesheet" href="/static/style.css?v=b30">
 </head>
 <body>
 <header>
@@ -96,6 +96,8 @@
         <button id="btnPause">暂停派发</button>
         <button id="btnResume">恢复派发</button>
         <button id="btnClearBreaker">复位熔断</button>
+        <button id="btnStop" class="btn-warn"
+                title="落停止标记，worker 收完在飞任务后自行退出；恢复用「恢复派发」">优雅停止</button>
         <span class="spacer"></span>
         <a id="exportJson" class="muted" href="#" target="_blank">导出 JSON</a>
         <a id="exportCsv" class="muted" href="#" target="_blank">导出 CSV</a>
@@ -143,6 +145,6 @@
   </aside>
 </main>
 
-<script src="/static/app.js?v=b28"></script>
+<script src="/static/app.js?v=b30"></script>
 </body>
 </html>

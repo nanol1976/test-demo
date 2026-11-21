@@ -59,7 +59,7 @@ const SNAP_TZ = "本地时间";
 function el(id) { return document.getElementById(id); }
 
 // Batch28：只读口令的界面表现。真正的拦截在服务端（403），这里只是别让人白点。
-const WRITE_BTNS = ["btnPause", "btnResume", "btnClearBreaker", "sendMsg"];
+const WRITE_BTNS = ["btnPause", "btnResume", "btnClearBreaker", "btnStop", "sendMsg"];
 
 function applyMode() {
   const ro = state.mode === "readonly";
@@ -1002,6 +1002,35 @@ async function sendCommand(command) {
   }
 }
 
+// Batch30：优雅停止是整机级动作（不针对某条流水线），所以不带 trace_id。
+// 平台落 data/STOP，worker 收完在飞任务后自行退出；恢复用「恢复派发」（master:resume）清标记。
+async function stopMaster() {
+  if (state.mode === "readonly") {
+    showResult("cmdResult", false, "当前是只读口令，不能下发指令（换全权口令再发）");
+    return;
+  }
+  const yes = window.confirm(
+    "确认落「优雅停止」标记？\n\nworker 会收完正在跑的任务后自行退出，不是硬杀。\n恢复要点「恢复派发」，它会顺带清掉标记。"
+  );
+  if (!yes) return;
+  try {
+    const r = await api(ROUTES.commands, {
+      method: "POST",
+      body: JSON.stringify({ command: "master:stop", reason: "从看板下发" }),
+    });
+    if (r.ok) {
+      showResult("cmdResult", true,
+        "已落停止标记：worker 会在当前任务收尾后自行退出。恢复请点「恢复派发」。\n" +
+        (typeof r.body === "string" ? r.body : JSON.stringify(r.body, null, 2)));
+    } else {
+      showResult("cmdResult", false, `${r.status} ${JSON.stringify(r.body)}`);
+    }
+    loadWorkers();
+  } catch (e) {
+    showResult("cmdResult", false, String(e));
+  }
+}
+
 const TEMPLATES = {
   task_dispatch: (ts) => ({
     trace_id: "demo-trace-001", task_id: "demo-task-001", msg_type: "task_dispatch",
@@ -1269,6 +1298,7 @@ function bind() {
   el("btnPause").addEventListener("click", () => sendCommand("master:pause"));
   el("btnResume").addEventListener("click", () => sendCommand("master:resume"));
   el("btnClearBreaker").addEventListener("click", () => sendCommand("master:clear-breaker"));
+  if (el("btnStop")) el("btnStop").addEventListener("click", stopMaster);
   el("fillTmpl").addEventListener("click", () => {
     const key = el("tmplSelect").value;
     if (!key) return;

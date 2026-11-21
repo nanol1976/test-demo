@@ -543,6 +543,47 @@ def stage_static():
           "## N." in guide11 and "master:stop" in guide11,
           "docs/base/11 没有 N 节")
 
+    # 1.8d Batch30：看板上的「优雅停止」按钮——前端只是入口，服务端仍是唯一闸门；
+    # 只读态必须一起置灰（别让人白点一次才发现被 403）。
+    html30 = read(os.path.join(ROOT, "app", "static", "index.html"))
+    css30 = read(os.path.join(ROOT, "app", "static", "style.css"))
+    js30 = read(os.path.join(ROOT, "app", "static", "app.js"))
+    check("Batch30 看板有「优雅停止」按钮",
+          'id="btnStop"' in html30 and "优雅停止" in html30, "index.html 没按钮")
+    check("Batch30 优雅停止按钮在只读态一起置灰",
+          '"btnStop"' in js30.split("WRITE_BTNS =", 1)[-1][:120], "WRITE_BTNS 没带 btnStop")
+    check("Batch30 点击走 master:stop（整机级，不带 trace_id）",
+          "function stopMaster" in js30 and '"master:stop"' in js30
+          and "btnStop" in js30.split("function bind()", 1)[-1][:4000],
+          "stopMaster 或绑定缺失")
+    check("Batch30 优雅停止按钮有告警色样式", "button.btn-warn" in css30, "style.css 缺 .btn-warn")
+
+    # 1.8e Batch30-B：每日快照生成器——它要能被"另一台机器/无人值守"跑起来，
+    # 所以必须零依赖（纯标准库）、必须自带 selftest、且取数口径必须对齐真实接口。
+    snap_path = os.path.join(ROOT, "scripts", "daily_snapshot.py")
+    snap_py = read(snap_path) if os.path.exists(snap_path) else ""
+    check("Batch30 每日快照脚本存在", bool(snap_py), "缺 scripts/daily_snapshot.py")
+    banned_imports = ("import requests", "import fastapi", "import sqlalchemy",
+                      "from app", "from worker", "import subprocess")
+    check("Batch30 每日快照只用标准库",
+          snap_py and not any(b in snap_py for b in banned_imports),
+          "daily_snapshot.py 引了非标准库/项目模块")
+    check("Batch30 每日快照自带 --selftest",
+          snap_py and '"--selftest"' in snap_py and "def run_selftest" in snap_py,
+          "缺 --selftest")
+    # 分页包裹是 {meta, items} 且 pipelines 的分页参数叫 size；写回 limit 会静默取空表
+    check("Batch30 每日快照按真实分页结构取数",
+          snap_py and '.get("items")' in snap_py and "/api/pipelines?size=" in snap_py,
+          "取数没解 items 或 pipelines 用了 limit")
+    # 真实接口时间带 +08:00 / offset，与 datetime.now() 相减会 TypeError
+    check("Batch30 每日快照时间统一归一到本地",
+          snap_py and "astimezone().replace(tzinfo=None)" in snap_py,
+          "parse_iso 没做时区归一")
+    guide14_path = os.path.join(ROOT, "docs", "base", "14-每日快照.md")
+    check("Batch30 每日快照有配套文档",
+          os.path.exists(guide14_path) and "daily_snapshot.py" in read(guide14_path),
+          "缺 docs/base/14-每日快照.md")
+
     # 1.9 查询契约：关键字与排序走白名单（不许把 sort 直通给 SQL）
     queries_py = read(os.path.join(ROOT, "app", "api", "routes_queries.py"))
     ledger_py = read(os.path.join(ROOT, "app", "repositories", "ledger.py"))

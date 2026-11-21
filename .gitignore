@@ -9,3 +9,4 @@ archive/
 artifacts/
 run/
 data/*.db.bak*
+data/snapshots/
