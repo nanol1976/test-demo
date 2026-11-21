@@ -238,6 +238,9 @@ class WorkerAgent:
         self._live = {"in_flight": 0, "limit": 1, "handled": 0}
         self._register_404_logged = False
         self.done = self._load_state()
+        # Batch31-D 补：记下"我做完这一版派发"的 dispatch_time。
+        # 平台重派同一 task_id 时 dispatch_time 会变，靠它区分"重派"与"我刚做过"。
+        self.dispatch_seen = self._load_dispatch()
         # 优雅退出：收到 SIGTERM/SIGINT 后不再拉新活，等在跑的任务收尾再退
         self._stop_requested = threading.Event()
         # Batch29：平台落的停止标记（默认 data/STOP）。worker 只读不写，
@@ -254,12 +257,26 @@ class WorkerAgent:
         except (OSError, ValueError):
             return set()
 
+    def _load_dispatch(self):
+        if not self.state_file or not os.path.isfile(self.state_file):
+            return {}
+        try:
+            with open(self.state_file, encoding="utf-8") as fh:
+                raw = json.load(fh).get("dispatch", {})
+            return raw if isinstance(raw, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
     def _save_state(self):
         if not self.state_file:
             return
         tmp = self.state_file + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({"done": sorted(self.done), "updated_at": now_iso()}, fh, ensure_ascii=False)
+            json.dump({
+                "done": sorted(self.done),
+                "dispatch": self.dispatch_seen,
+                "updated_at": now_iso(),
+            }, fh, ensure_ascii=False)
         os.replace(tmp, self.state_file)
 
     def report(self, status: str) -> None:
@@ -364,6 +381,9 @@ class WorkerAgent:
             return
 
         payload = task.get("payload") or {}
+        # Batch31-D 补：记下本次派发的 dispatch_time，重派时靠它判断"是不是新一轮"
+        self.dispatch_seen[task_id] = task.get("dispatch_time") or ""
+        self._save_state()
         spec = payload.get("exec") if isinstance(payload, dict) else None
         log("pick_task", task_id=task_id, trace_id=trace_id, task_goal=payload.get("task_goal"))
 
@@ -552,6 +572,20 @@ class WorkerAgent:
                         return 1
                     time.sleep(backoff)
                     continue
+
+                # Batch31-D 补：同一 task_id 被平台重派时，撤回本地"做过"的记录。
+                # 判据：平台这次的 dispatch_time 比本地记的新（本地没记过 = 视为新派发）。
+                # 不这么做的话，max_retry 形同虚设——重派同一 task_id 会被自己的 done 集合挡掉。
+                for t in tasks:
+                    tid = t.get("task_id")
+                    if tid not in self.done:
+                        continue
+                    prev = self.dispatch_seen.get(tid)
+                    cur = t.get("dispatch_time") or ""
+                    if prev and cur and cur <= prev:
+                        continue
+                    self.done.discard(tid)
+                    log("redispatch_accept", task_id=tid, prev=prev, cur=cur)
 
                 seen = set(self.done) | {t.get("task_id") for t in self._inflight_tasks(inflight)}
                 todo = [t for t in tasks if t.get("task_id") not in seen]

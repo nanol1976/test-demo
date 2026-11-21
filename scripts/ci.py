@@ -291,6 +291,8 @@ def stage_static():
           'params["instance_id"]' in worker_py and "instance_id=self.instance_id" in worker_py)
     check("回执 metadata 带 instance_id（可追溯执行岗位）",
           '"instance_id": self.instance_id' in worker_py)
+    check("重派同一 task_id 不会被本地 done 挡掉（按 dispatch_time 认新一轮）",
+          "redispatch_accept" in worker_py and "dispatch_seen" in worker_py)
 
     # 1.5b3 执行方在线视图红线（Batch12）：靠任务心跳推断，不新增接口
     model_py = read(os.path.join(ROOT, "app", "models", "__init__.py"))
