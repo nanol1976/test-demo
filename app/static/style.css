@@ -411,3 +411,17 @@ textarea {
 .rv-chip.rv-self { border-style: dashed; color: var(--ink); }
 /* Batch32 补：任务表第一列是 id，换行会把 t-b32rv-neg 拆成三行，钉住不折 */
 #taskTableWrap td:first-child { white-space: nowrap; }
+/* Batch32-3：审计表里的插件名章。位置在「目标」列尾，跟实例名并列，
+   一眼看出「谁 / 用哪个插件 / 过没过」，不让插件名挤进动作列。 */
+.plugin-chip {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px 2px;
+  font-size: 11px;
+  line-height: 1.5;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  color: var(--ink-2, #444);
+  background: #fff;
+  vertical-align: 1px;
+}

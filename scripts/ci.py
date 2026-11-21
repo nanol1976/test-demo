@@ -448,7 +448,8 @@ def stage_static():
 
     # 1.5b9 审计分页 + 操作者（Batch22）：翻页不许退回"硬顶 20 条"，操作者不许变成鉴权
     check("审计接口支持 offset（分页走服务端，不靠前端拉全量）",
-          "offset: int = Query" in atxt and ".offset(offset)" in atxt)
+          "offset: int = Query" in atxt
+          and (".offset(offset)" in atxt or "entries[offset:offset + limit]" in atxt))
     check("审计表中的 operator 只 ADD COLUMN 过（v009）",
           os.path.exists(os.path.join(ROOT, "migrations", "versions", "v009_audit_operator.py")))
     check("下发接口从 X-Operator 取操作者",
@@ -854,7 +855,46 @@ def stage_static():
           and "--only-deny" in read(audit_cli)
           and "import sqlite3" in read(audit_cli), "审计查不了等于没留痕")
 
+    # 1.8k Batch32-3：探针进派发链 + 审计两源合并上板。红线守「授权不过不跑探针、
+    # 探针不过必拒、一单只留一行审计、审计面板不许只看配额不看插件」。
+    check("Batch32-3 一级规则复核真的起子进程跑 probes（带超时，不靠人肉）",
+          "def run_probes" in plug_svc and "subprocess.run(" in plug_svc
+          and "TimeoutExpired" in plug_svc and "probes.py" in plug_svc,
+          "probes 没接到派发链上")
+    gate_body = dispatch32b.split("def _gate_plugin", 1)[-1]
+    check("Batch32-3 探针闸门只在授权放行后跑（没资格就不动执行环境）",
+          gate_body.index("judge_plugin(") < gate_body.index("run_probes(")
+          and 'if decision == "allow":' in gate_body,
+          "探针跑在授权判定之前")
+    check("Batch32-3 探针不过改判 deny，理由写进审计",
+          "一级规则复核未通过" in gate_body and "decision = \"deny\"" in gate_body,
+          "探针失败没有落成拒单")
+    gate_tail = gate_body[gate_body.index("verdict = judge_plugin("):]
+    check("Batch32-3 一单一条审计（判定 + 探针只写最终结论一行）",
+          gate_tail.count("record_plugin_audit(") == 1
+          and gate_tail.index("record_plugin_audit(") > gate_tail.index("run_probes("),
+          f"判定后写了 {gate_tail.count('record_plugin_audit(')} 行审计")
+    routes_audit_py = read(os.path.join(ROOT, "app", "api", "routes_audit.py"))
+    check("Batch32-3 审计查询把插件审计也并进来（接口路径不变）",
+          "PluginAudit" in routes_audit_py and "WorkerQuotaAudit" in routes_audit_py
+          and "entries[offset:offset + limit]" in routes_audit_py,
+          "审计只读一边，插件拒单看不见")
+    check("Batch32-3 插件行带 plugin/decision，且不冒充配额行",
+          "class AuditItem" in routes_audit_py
+          and "prev_limit: Optional[int]" in routes_audit_py
+          and "plugin: Optional[str]" in routes_audit_py,
+          "插件行还是套配额字段")
+    appjs32 = read(os.path.join(ROOT, "app", "static", "app.js"))
+    check("Batch32-3 看板运维审计面板认得插件行（不再是空白/乱码）",
+          "plugin:" in appjs32 and "已拒" in appjs32 and "已放行" in appjs32,
+          "前端没渲染插件行")
+    doc15 = read(os.path.join(ROOT, "docs", "base", "15-岗位与权限.md"))
+    check("Batch32-3 岗位文档登记插件授权口径（撤权 > 实例 > 岗位 > 拒）",
+          "插件授权口径" in doc15 and "撤权 > 实例 > 岗位 > 拒" in doc15,
+          "授权口径只活在代码里，文档没登记")
+
     # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
+
     # 不许各处自己拼 "data/STOP"；worker 只读标记，不写、不删。
     routes_commands_py = read(os.path.join(ROOT, "app", "api", "routes_commands.py"))
     stopflag_py = read(os.path.join(ROOT, "app", "core", "stopflag.py"))

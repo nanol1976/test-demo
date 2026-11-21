@@ -41,6 +41,21 @@ def check(label, ok, detail=""):
         FAILED.append(label)
 
 
+def _ts(value):
+    """把审计时间串解析成可比时间：两种写法（带 T 的 ISO / 带斜杠的旧式）都认。"""
+    text = (value or "").replace("/", "-").replace(" ", "T")
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return datetime.min
+    return dt if dt.tzinfo else dt.replace(tzinfo=None)
+
+
+def _ordered(snap):
+    """只守「时间倒序」这一条（同刻的先后由服务端的 source/id 兜底，不在这里判）。"""
+    return all(_ts(snap[i][0]) >= _ts(snap[i + 1][0]) for i in range(len(snap) - 1))
+
+
 def request(method, url, payload=None, timeout=15):
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
     headers = {"Accept": "application/json"}
@@ -195,7 +210,7 @@ def main() -> int:
             print("\n=== 3) 未授权实例（qa-mac，角色 qa 不在 granted_roles） ===")
             code, body = dispatch(base, "b32p-deny", "t-b32p-deny", "qa-mac", plugin="deploy-smoke")
             msg = json.dumps(body or {}, ensure_ascii=False)
-            check("未授权实例被拒", code in (409, 422) and "无权使用插件" in msg, f"code={code}")
+            check("未授权实例被拒", code in (409, 422) and "不能用插件" in msg, f"code={code}")
             check("拒单理由点出「均未授权」",
                   "均未授权" in (audit_rows(DB)[-1][4] or ""))
 
@@ -210,8 +225,9 @@ def main() -> int:
             set_index(PLUGINS, granted_to=["qa-mac"])
             code, body = dispatch(base, "b32p-inst", "t-b32p-inst", "qa-mac", plugin="deploy-smoke")
             check("实例白名单生效（不重启）", code == 202, f"code={code}")
-            check("审计理由点出实例命中",
-                  "实例命中 granted_to" in (audit_rows(DB)[-1][4] or ""))
+            check("审计理由点出实例命中 + 一级复核通过",
+                  "实例命中 granted_to" in (audit_rows(DB)[-1][4] or "")
+                  and "一级复核通过" in (audit_rows(DB)[-1][4] or ""))
 
             print("\n=== 6) 撤权一票否决（revoked 命中，即使 granted_to 也拒） ===")
             set_index(PLUGINS, granted_to=["qa-mac"], revoked_instances=["qa-mac"])
@@ -233,6 +249,31 @@ def main() -> int:
             msg = json.dumps(body or {}, ensure_ascii=False)
             check("未登记插件被拒", code in (409, 422) and "未登记" in msg, f"code={code}")
 
+            print("\n=== 8b) 一级规则复核：probes 不过就拒（授权放行也不行） ===")
+            bad_dir = os.path.join(PLUGINS, "bad-probe")
+            shutil.copytree(os.path.join(ROOT, "plugins", "deploy-smoke"), bad_dir)
+            with open(os.path.join(bad_dir, "probes.py"), "w", encoding="utf-8", newline="\n") as f:
+                f.write("import sys\nsys.exit(3)\n")
+            idx_path = os.path.join(PLUGINS, "index.json")
+            with open(idx_path, "r", encoding="utf-8") as f:
+                idx = json.load(f)
+            idx["plugins"].append({
+                "name": "bad-probe", "latest": "1.0.0", "versions": ["1.0.0"],
+                "review_state": "reviewed", "granted_to": [],
+                "granted_roles": ["ops"], "revoked_instances": [],
+            })
+            with open(idx_path, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(idx, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+            code, body = dispatch(base, "b32p-probe", "t-b32p-probe", "ops-win", plugin="bad-probe")
+            msg = json.dumps(body or {}, ensure_ascii=False)
+            check("探针不过被拒（授权明明是放行的）",
+                  code in (409, 422) and "一级规则复核未通过" in msg, f"code={code}")
+            check("审计理由同时写了「岗位命中」和「一级复核未通过」",
+                  "岗位命中" in (audit_rows(DB)[-1][4] or "")
+                  and "一级规则复核未通过" in (audit_rows(DB)[-1][4] or ""),
+                  str(audit_rows(DB)[-1][4])[:90])
+
             print("\n=== 9) plugin 字段格式非法 ===")
             code, body = dispatch(base, "b32p-badfmt", "t-b32p-badfmt", "qa-mac", plugin="../etc")
             msg = json.dumps(body or {}, ensure_ascii=False)
@@ -243,8 +284,8 @@ def main() -> int:
             rows = audit_rows(DB)
             denies = [r for r in rows if r[3] == "deny"]
             allows = [r for r in rows if r[3] == "allow"]
-            check("授权判定逐次留痕（7 次判定 = 5 拒 + 2 放行）",
-                  len(rows) == 7 and len(denies) == 5 and len(allows) == 2,
+            check("授权判定逐次留痕（8 次判定 = 6 拒 + 2 放行）",
+                  len(rows) == 8 and len(denies) == 6 and len(allows) == 2,
                   f"rows={len(rows)} deny={len(denies)} allow={len(allows)}")
             check("格式非法的插件名在入参层拦下（不占审计行，没有有效插件身份）",
                   all(r[1] != "../etc" for r in rows))
@@ -253,6 +294,44 @@ def main() -> int:
             check("审计 id 单调，不重写旧行", all(rows[i][0] < rows[i + 1][0] for i in range(len(rows) - 1)))
             check("拒单没有污染任务台账（拒单条数 > 建单条数）",
                   count(DB, "plugin_audit") >= count(DB, "task_ledger"))
+
+            print("\n=== 10b) /api/audit 合并分页（配额 + 插件两源合成一页） ===")
+            code, body = request("GET", base + "/api/audit?limit=50")
+            items = (body or {}).get("items") or []
+            check("审计接口把插件判定也吐出来", code == 200 and len(items) >= 8, f"code={code} n={len(items)}")
+            plugin_rows = [i for i in items if str(i.get("command", "")).startswith("plugin:")]
+            check("插件行带 plugin/decision 且没有配额字段",
+                  plugin_rows and all(i.get("plugin") and i.get("decision") in ("allow", "deny")
+                                      and i.get("prev_limit") is None for i in plugin_rows),
+                  str(plugin_rows[0])[:120] if plugin_rows else "无插件行")
+            snap = [(i.get("created_at"), i.get("command"), i.get("id")) for i in items]
+            check("两源合并后按时间倒序（先用解析后时间比，兼容两种时间写法）",
+                  _ordered(snap), str(snap)[:220])
+            code, body = request("GET", base + "/api/audit?limit=50&command=plugin:deny")
+            items2 = (body or {}).get("items") or []
+            check("按 command=plugin:deny 只出插件拒单",
+                  code == 200 and items2 and all(i.get("command") == "plugin:deny" for i in items2),
+                  f"n={len(items2)}")
+            code, body = request("GET", base + "/api/audit?limit=50&command=plugin:allow")
+            check("按 command=plugin:allow 只出插件放行",
+                  code == 200 and len((body or {}).get("items") or []) == 2,
+                  f"n={len((body or {}).get('items') or [])}")
+            code, body = request("GET", base + "/api/audit?limit=50&instance_id=qa-mac")
+            items3 = (body or {}).get("items") or []
+            check("按实例过滤时插件行一起收敛到该实例",
+                  code == 200 and items3 and all(i.get("instance_id") == "qa-mac" for i in items3),
+                  f"n={len(items3)}")
+            code, body = request("GET", base + "/api/audit?limit=2")
+            page_a = (body or {}).get("items") or []
+            code, body = request("GET", base + "/api/audit?limit=2&offset=2")
+            page_b = (body or {}).get("items") or []
+            check("分页切片落在合并后的总序列上（不是各源各切一刀）",
+                  len(page_a) == 2 and len(page_b) == 2 and
+                  not set((i.get("command"), i.get("id")) for i in page_a) &
+                  set((i.get("command"), i.get("id")) for i in page_b),
+                  f"a={len(page_a)} b={len(page_b)}")
+            code, body = request("GET", base + "/api/audit?limit=50&command=plugin:nosuch")
+            check("未知插件动作返回空页而不是全量", code == 200 and ((body or {}).get("items") or []) == [])
 
             print("\n=== 11) 接口面仍是 11 条路径 ===")
             code, body = request("GET", base + "/openapi.json")

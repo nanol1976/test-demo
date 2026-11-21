@@ -291,15 +291,17 @@ def _resolve_plugin(payload: Dict[str, Any]) -> Optional[str]:
 def _gate_plugin(db: Session, repo: LedgerRepository, envelope: Envelope,
                  payload: Dict[str, Any], plugin_name: str,
                  target_worker: str, target_instance: Optional[str]) -> None:
-    """带插件的派单：先判授权、把结论落审计，再决定放不放行。
+    """带插件的派单：先判授权、再跑一级规则复核，把结论落审计，再决定放不放行。
 
-    两道都必须过：
+    三道都必须过：
       1) 必须指定 target_instance（不指定岗位就没法判「这个岗位有没有资格」）；
-      2) app/services/plugins.py 的三级判定必须 allow。
+      2) app/services/plugins.py 的三级判定必须 allow；
+      3) 一级规则复核（plugins/<name>/probes.py）必须退出码 0。
+    一次派单只落一行审计（最终结论），理由里带「授权命中哪一级 + 一级复核结果」。
     拒单不建任务、不建流水线，但审计行必须留下（append-only，自己 commit，
     不能因为随后抛异常被回滚吃掉）。
     """
-    from app.services.plugins import judge_plugin
+    from app.services.plugins import judge_plugin, run_probes
 
     if not target_instance:
         repo.record_plugin_audit(
@@ -315,16 +317,27 @@ def _gate_plugin(db: Session, repo: LedgerRepository, envelope: Envelope,
         )
 
     verdict = judge_plugin(plugin_name, target_instance)
+    decision = verdict["decision"]
+    reason = verdict["reason"]
+
+    if decision == "allow":
+        probe = run_probes(plugin_name)
+        if probe["ok"]:
+            reason += "；一级复核通过" if not probe["skipped"] else "；" + probe["summary"]
+        else:
+            decision = "deny"
+            reason += "；一级规则复核未通过：" + probe["summary"]
+
     repo.record_plugin_audit(
         trace_id=envelope.trace_id, task_id=envelope.task_id,
         plugin_name=plugin_name, plugin_version=verdict.get("version"),
         worker_id=target_worker, instance_id=target_instance,
-        decision=verdict["decision"], reason=verdict["reason"],
+        decision=decision, reason=reason,
     )
-    if verdict["decision"] != "allow":
+    if decision != "allow":
         raise IllegalTransitionError(
-            f"task_dispatch 被拒：岗位 {target_instance} 无权使用插件 {plugin_name}"
-            f"（{verdict['reason']}）"
+            f"task_dispatch 被拒：岗位 {target_instance} 不能用插件 {plugin_name}"
+            f"（{reason}）"
         )
 
 

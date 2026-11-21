@@ -18,6 +18,8 @@
 """
 import json
 import os
+import subprocess
+import sys
 from typing import Any, Dict, Optional, Tuple
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -103,3 +105,29 @@ def judge_plugin(plugin_name: str, instance_id: str) -> Dict[str, Any]:
     return {"decision": "deny", "version": version, "state": state,
             "reason": "实例 %s 与岗位 %s 均未授权（granted_to/granted_roles 都没有）"
                       % (instance, role or "-")}
+
+
+def run_probes(plugin_name: str, timeout: int = 30) -> Dict[str, Any]:
+    """一级规则复核：真跑 plugins/<name>/probes.py（机器、秒级）。
+
+    约定：probes.py 以仓库根为第一参数、以退出码表达结论（0 通过）。
+    没有 probes.py 的插件视为「跳过」——不假装跑过，原因会写进审计。
+    只跑 reviewed 插件：调用方（判授权之前）已经拦掉 draft/revoked。
+    """
+    script = os.path.join(plugins_root(), plugin_name, "probes.py")
+    if not os.path.exists(script):
+        return {"ok": True, "skipped": True, "summary": "插件未带 probes.py，跳过一级规则复核"}
+    try:
+        proc = subprocess.run(
+            [sys.executable, script, ROOT],
+            cwd=ROOT, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "skipped": False, "summary": "probes.py 超时（> %ds）" % timeout}
+    except OSError as exc:
+        return {"ok": False, "skipped": False, "summary": "probes.py 起不来：%s" % exc}
+    out = (proc.stdout or "").strip().splitlines()
+    summary = out[-1][:220] if out else (proc.stderr or "").strip()[:220]
+    return {"ok": proc.returncode == 0, "skipped": False,
+            "summary": summary or "（probes 无输出，退出码 %d）" % proc.returncode}

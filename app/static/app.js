@@ -887,7 +887,8 @@ function renderAudit(view, opts = {}) {
   const shown = items.filter((it) => {
     if (!kw) return true;
     const target = `${it.worker_id}/${it.instance_id}`.toLowerCase();
-    return target.includes(kw) || (it.reason || "").toLowerCase().includes(kw) || it.command.includes(kw);
+    return target.includes(kw) || (it.reason || "").toLowerCase().includes(kw)
+      || it.command.includes(kw) || `${it.plugin || ""}`.toLowerCase().includes(kw);
   });
   const meta = (view && view.meta) || { total: 0 };
   el("auditCount").textContent = items.length
@@ -915,11 +916,24 @@ function renderAudit(view, opts = {}) {
     timeCell.title = it.created_at || "";
     tr.appendChild(timeCell);
     tr.appendChild(td(it.operator || "—", it.operator ? "mono" : "muted"));
-    tr.appendChild(td(it.command.replace("master:", ""), "mono"));
-    tr.appendChild(td(`${it.worker_id}/${it.instance_id}`, "mono"));
+    const isPlugin = String(it.command || "").indexOf("plugin:") === 0;
     const isQuota = it.command === "master:worker-limit";
+    const actionText = isPlugin
+      ? (it.decision === "deny" ? "插件拒单" : "插件放行")
+      : it.command.replace("master:", "");
+    tr.appendChild(td(actionText, "mono"));
+    const targetCell = td(`${it.worker_id}/${it.instance_id}`, "mono");
+    if (isPlugin) {
+      const chip = document.createElement("span");
+      chip.className = "plugin-chip";
+      chip.textContent = it.plugin || "—";
+      targetCell.appendChild(chip);
+    }
+    tr.appendChild(targetCell);
     tr.appendChild(td(isQuota ? `${it.prev_limit}→${it.desired_limit}` : "—", isQuota ? "num" : "muted"));
-    const eff = auditEffective(isQuota ? it.effective : null);
+    const eff = isPlugin
+      ? { label: it.decision === "deny" ? "已拒" : "已放行", cls: it.decision === "deny" ? "bad" : "ok" }
+      : auditEffective(isQuota ? it.effective : null);
     const cell = document.createElement("td");
     const span = document.createElement("span");
     span.className = "tag " + eff.cls + (eff.cls === "ok" ? " is-stamp" : "");
