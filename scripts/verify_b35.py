@@ -102,7 +102,8 @@ def main():
           "include_artifact" in api_src and "artifacts.read_text(task_id)" in api_src)
     check("没有新开取产物的接口路径", "/api/artifacts" not in api_src)
 
-    print(f"\n结果：{'全绿' if not FAILED else '失败 ' + str(len(FAILED)) + ' 项'}")
+    # run_all 只认这两个字的结论口径，别只写"全绿"，否则跑在 CI 里会被判红（Batch35 真踩过）
+    print(f"\n结果：{'全部通过' if not FAILED else '失败 ' + str(len(FAILED)) + ' 项'}")
     if FAILED:
         for item in FAILED:
             print(f"  - {item}")

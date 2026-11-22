@@ -1081,6 +1081,10 @@ def stage_static():
           "_persist_remote_artifact(envelope.task_id, payload)" in dispatch_py34
           and "@_idempotent\ndef _persist_remote_artifact" not in dispatch_py34,
           "落盘挂在错的位置，会拿 handler 的 envelope 当 payload 用")
+    b35_src = read(os.path.join(ROOT, "scripts", "verify_b35.py"))
+    check("Batch35 验收脚本按 run_all 口径输出结论",
+          "全部通过" in b35_src,
+          "run_all 只认「全部通过」四个字，写「全绿」会被 CI 判红")
 
     # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
 
