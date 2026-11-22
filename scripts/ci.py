@@ -960,6 +960,11 @@ def stage_static():
     check("Batch33-1 凭证仍只读用户 ~/.dsh（运行 home 不接管凭证）",
           'os.path.join(user_dsh_home(), ".credentials.yaml")' in dsh_adapter_py,
           "凭证被搬到运行 home 就等于把 key 复制进仓库")
+    check("Batch33-1 缓存只增不爆：按天清 patch-*.yml，删不掉也不抛",
+          "def prune_cache" in dsh_adapter_py and "prune_cache()" in dsh_adapter_py
+          and 'startswith("patch-")' in dsh_adapter_py
+          and "except OSError" in dsh_adapter_py,
+          "缓存没有清理口，或清理会把别的文件一起带走")
 
     # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
 

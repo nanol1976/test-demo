@@ -85,7 +85,8 @@ POST /api/messages                                    # 报活 / 交活 / 报做
 
 - 命令固定是 `dsh --profile headless --patch <patch 路径> "<task_goal>"`。headless profile 自身是空 patch，所以每次都用 `--patch` 临时叠上英伟达路由，**不改用户自己的 `~/.dsh` 配置**。
 - 运行 home 也收进仓库：Worker 给子进程设 `DSH_HOME=run/dsh_home`（`MWP_DSH_HOME` 可改），只把用户 `~/.dsh/profiles/headless` 里的四个小文件（`cordis.yml` / `cordis.patch.yml` / `package.json` / `pnpm-workspace.yaml`）复制过去，node_modules 不复制、bundle 仍用全局装的那份。原因：dsh 每次启动都会重写 `profiles/<name>/cordis.yml`，指着用户的 home 就等于让 Worker 改用户配置，而且很多机器禁止普通进程写用户目录，会直接 `EPERM` 起不来。凭证仍只从 `~/.dsh/.credentials.yaml` 读（只读，不复制）。临时目录（`TMP`/`TEMP`/`TMPDIR`）也指到 `run/tmp_dsh/temp`，免得插件写系统临时目录时被拦。
-- patch 路径怎么来：模型等于仓库默认时直接用 `worker/dsh/nvidia-patch.yml`；按单换成别的模型时，把这份 yml 当**模板**渲染（`models` 列表和 `agent-default-model` 两处一起换，`name:` 换成模型短名），写到 `run/tmp_dsh/patch-<模型名>.yml`。同一个模型只占一个文件、内容每次重写，**不删**（有些机器上删文件会被安全软件拦，删不干净还留垃圾）。仓库里那份永远不动。
+- **不叠加机器级偏好**：运行 home 隔开后，用户 `~/.dsh/cordis.patch.yml` 那层机器本地偏好不会作用到 headless 单上。这是有意的——headless 单的 provider/模型已经由 `--patch` 明确写死，少一层隐式叠加反而更可预测。
+- patch 路径怎么来：模型等于仓库默认时直接用 `worker/dsh/nvidia-patch.yml`；按单换成别的模型时，把这份 yml 当**模板**渲染（`models` 列表和 `agent-default-model` 两处一起换，`name:` 换成模型短名），写到 `run/tmp_dsh/patch-<模型名>.yml`。同一个模型只占一个文件、内容每次重写，**不删**（有些机器上删文件会被安全软件拦，删不干净还留垃圾）。仓库里那份永远不动。每次执行前顺手清掉 `run/tmp_dsh` 里 **7 天**没动过的 `patch-*.yml`（`CACHE_DAYS` 常量可改）；清不掉就跳过，不影响这一单。
 - key 从 `~/.dsh/.credentials.yaml` 的 `refs.NVIDIA_API_KEY` 读出（`MWP_DSH_CREDENTIALS` 可指向别处），**只塞进子进程 env**，不落仓库、不进台账。找不到 key → 直接拒单，理由写明找的是哪一段。
 - 判定只看退出码：`0` 即成功，**stdout 就是产出**（进回执 `logs`），非零即拒单并把 stderr（或 stdout 末 400 字）带进理由。
 - 注意 dsh 的推理过程写在 **stderr**（前缀 `dsh: reasoning:`），答案才在 stdout，所以 `logs` 只取 stdout 是对的，stderr 留给拒单理由。

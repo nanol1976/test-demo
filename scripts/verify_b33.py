@@ -18,6 +18,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "worker"))
@@ -212,6 +213,25 @@ def main():
     check("子进程拿到 DSH_HOME（指向仓库）", lines[0] == "DSH_HOME=" + os.path.abspath(home), lines[0])
     check("子进程临时目录也在仓库里", lines[1].startswith("TEMP=" + os.path.abspath(dsh_adapter.TMP_PATCH_ROOT)),
           lines[1])
+
+    print("\n=== 15) 缓存清理只清旧的，且清不动也不影响这一单 ===")
+    fresh = os.path.join(dsh_adapter.TMP_PATCH_ROOT, "patch-fresh.yml")
+    os.makedirs(dsh_adapter.TMP_PATCH_ROOT, exist_ok=True)
+    stub_text = open(dsh_adapter.PATCH_PATH, encoding="utf-8").read()
+    old = os.path.join(dsh_adapter.TMP_PATCH_ROOT, "patch-old.yml")
+    with open(fresh, "w", encoding="utf-8") as fh:
+        fh.write(stub_text)
+    with open(old, "w", encoding="utf-8") as fh:
+        fh.write(stub_text)
+    os.utime(old, (time.time() - 30 * 86400, time.time() - 30 * 86400))
+    keeper = os.path.join(dsh_adapter.TMP_PATCH_ROOT, "keepme.txt")
+    with open(keeper, "w", encoding="utf-8") as fh:
+        fh.write("x")
+    os.utime(keeper, (time.time() - 30 * 86400, time.time() - 30 * 86400))
+    removed = dsh_adapter.prune_cache()
+    check("新鲜缓存不被清", os.path.isfile(fresh))
+    check("非 patch 文件一概不碰", os.path.isfile(keeper))
+    check("清缓存不抛异常（删不掉也算过）", isinstance(removed, list), str(removed)[:60])
 
     print("\n=== 9) 仓库里不许出现真 key ===")
     hits = []

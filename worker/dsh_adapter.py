@@ -30,6 +30,9 @@ RUNTIME_HOME = os.path.join(ROOT, "run", "dsh_home")
 # 拦住 ../、空格、换行这些——它是写进 yml 的，不是拼 shell，但也不能当成路径或注入。
 MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,80}$")
 
+# 按模型缓存的 patch 只增不删会越攒越多；超过这些天没动过就顺手清一次（删不掉就算了）。
+CACHE_DAYS = 7.0
+
 
 class DshError(RuntimeError):
     pass
@@ -97,6 +100,30 @@ def read_nvidia_key(path: str = None) -> str:
                 value = match.group(1).strip("'\"")
                 return value or None
     return None
+
+
+def prune_cache(days: float = None) -> list:
+    """清掉 `run/tmp_dsh` 下超过 N 天没动过的 patch 缓存，返回清掉的文件名。
+
+    只动自己写的 `patch-*.yml`，别的文件一概不碰；删不掉（有的机器拦删除）就跳过，
+    不抛异常——缓存是加速用的，清不动最多是多占几 KB，不该影响这一单。
+    """
+    limit = CACHE_DAYS if days is None else float(days)
+    cutoff = time.time() - limit * 86400
+    removed = []
+    if not os.path.isdir(TMP_PATCH_ROOT):
+        return removed
+    for name in os.listdir(TMP_PATCH_ROOT):
+        if not name.startswith("patch-") or not name.endswith(".yml"):
+            continue
+        full = os.path.join(TMP_PATCH_ROOT, name)
+        try:
+            if os.path.isfile(full) and os.path.getmtime(full) < cutoff:
+                os.remove(full)
+                removed.append(name)
+        except OSError:
+            continue
+    return removed
 
 
 def check_model(model) -> str:
@@ -188,6 +215,7 @@ def run(goal: str, timeout: float = 120.0, patch_path: str = None,
         raise DshError("NVIDIA_API_KEY 没找到：~/.dsh/.credentials.yaml 的 refs 里没有，"
                        "或可用 MWP_DSH_CREDENTIALS 指到别处")
     target_model = resolve_model(model)
+    prune_cache()
     patch, _ = resolve_patch(target_model, template=patch_path)
     home = dsh_home()
     ensure_profile(profile)
