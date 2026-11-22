@@ -1000,6 +1000,10 @@ def stage_static():
     check("Batch33-2 看不到产物就不写路径（不编）",
           'art.get("path") or None' in read(os.path.join(ROOT, "app", "api", "routes_messages.py")),
           "查不到就编，等于把台账当小说写")
+    check("Batch33-2 产物有按天清理（默认 30 天，只清 .log，删不掉不抛）",
+          "def prune_artifacts" in dsh_adapter_py and "ARTIFACT_DAYS = 30.0" in dsh_adapter_py
+          and "prune_artifacts()" in dsh_adapter_py and 'endswith(".log")' in dsh_adapter_py,
+          "产物只增不删，迟早把磁盘塞满")
     check("Batch33-2 产物全文走已有路径 + 查询参数（不新增路径）",
           "include_artifact" in read(os.path.join(ROOT, "app", "api", "routes_messages.py"))
           and "include_artifact=true" in app_js33_2,

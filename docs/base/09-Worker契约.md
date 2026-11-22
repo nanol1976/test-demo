@@ -104,6 +104,7 @@ POST /api/messages                                    # 报活 / 交活 / 报做
 - 任务号当文件名用，先按白名单洗：只留 `A-Za-z0-9._-`，连续的 `.` 一律换成 `_`，开头不许是点。所以 `../../evil` 会变成 `____evil.log`，产物永远落在 `run/artifacts` 里。
 - **平台不加接口路径**（接口面铁律仍是 11 条）：`app/services/artifacts.py` 把本机能看到的 `run/artifacts` 扫成一张 `{task_id: {path, bytes}}` 索引（按目录 mtime 缓存，不每刷一次全盘 stat），挂到 `TaskView` 的 `artifact` / `artifact_bytes` / `artifact_error` 三个字段上——跟 Batch32-1 加复核三字段是同一个做法：**路径不动，返回体变厚**。
 - 看板在 task_id 后面加一枚「产物 N KB」小签：只有平台**本机**真能看到文件才出现，鼠标悬停显示相对路径；Worker 写档失败则标一枚黄的「产物未留档」，悬停显示原因。
+- **留 30 天，之后由 Worker 自己清**：每次执行前顺手清掉 `run/artifacts` 里超过 30 天没动过的 `.log`（`ARTIFACT_DAYS` 常量，或用 `MWP_ARTIFACT_DAYS` 改），别的文件一概不碰，清不掉就跳过。产物是"这一单干过什么"的证据，所以留得比 patch 缓存（7 天）久。
 - 点开看全文也**不新增路径**：`GET /api/tasks/{task_id}?include_artifact=true` 在已有单任务接口上多带一个 `artifact_text` 字段（超 8000 字符截断并标注），看板用抽屉面板展示，口令仍在请求头里、不进 URL。列表接口永远不填这个字段，免得把列表撑成下载站。平台读不到（产物在别的机器上）就空着，并在抽屉里直说"回到执行方打开 `run/artifacts/<task_id>.log`"。
 
 思考档：

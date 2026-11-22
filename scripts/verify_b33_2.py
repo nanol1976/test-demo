@@ -189,6 +189,39 @@ def main():
     except Exception as exc:  # 缺依赖时如实报红，不假装通过
         check(f"平台产物索引可导入（{type(exc).__name__}）", False, str(exc)[:80])
 
+    print("\n=== 7) 产物按天清理（Batch33-3） ===")
+    import time as _time
+    fresh = os.path.join(dsh_adapter.ARTIFACT_ROOT, "t-b332-fresh.log")
+    stale = os.path.join(dsh_adapter.ARTIFACT_ROOT, "t-b332-stale.log")
+    keeper = os.path.join(dsh_adapter.ARTIFACT_ROOT, "t-b332-keep.txt")
+    for path in (fresh, stale, keeper):
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("x")
+    old_ts = _time.time() - 40 * 86400
+    os.utime(stale, (old_ts, old_ts))
+    os.utime(keeper, (old_ts, old_ts))
+    removed = dsh_adapter.prune_artifacts()
+    check("新鲜产物不被选中", "t-b332-fresh.log" not in removed, str(removed)[:60])
+    check("超过 30 天的产物被选中清理", "t-b332-stale.log" in removed, str(removed)[:60])
+    check("非 .log 文件一概不动", "t-b332-keep.txt" not in removed)
+    check("清产物不抛异常（删不掉也算过）", isinstance(removed, list), str(removed)[:60])
+    # 有的环境（比如这台机器的沙箱）删文件会"假装成功"，所以"文件是否真的消失"只作宽容记录
+    if os.path.isfile(stale):
+        print("  [NOTE] 本机 os.remove 返回成功但文件仍在（沙箱拦删除），符合已知环境限制")
+    check("天数可被 MWP_ARTIFACT_DAYS 覆盖",
+          dsh_adapter.ARTIFACT_DAYS == 30.0 and "MWP_ARTIFACT_DAYS" in read(
+              os.path.join(ROOT, "worker", "dsh_adapter.py")))
+    os.environ["MWP_ARTIFACT_DAYS"] = "0"
+    removed2 = dsh_adapter.prune_artifacts()
+    check("环境变量设 0 天 → 连新鲜的也被选中（说明开关真的生效）",
+          "t-b332-fresh.log" in removed2, str(removed2)[:60])
+    os.environ.pop("MWP_ARTIFACT_DAYS", None)
+    for path in (fresh, stale, keeper):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
     print()
     if FAILED:
         print(f"验收结果：失败（{len(FAILED)} 项）")

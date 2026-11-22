@@ -45,6 +45,9 @@ TASK_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 # 按模型缓存的 patch 只增不删会越攒越多；超过这些天没动过就顺手清一次（删不掉就算了）。
 CACHE_DAYS = 7.0
 
+# 产物是"这一单干过什么"的证据，留得比缓存久：默认 30 天，可用 MWP_ARTIFACT_DAYS 改。
+ARTIFACT_DAYS = 30.0
+
 
 class DshError(RuntimeError):
     pass
@@ -129,6 +132,35 @@ def prune_cache(days: float = None) -> list:
         if not name.startswith("patch-") or not name.endswith(".yml"):
             continue
         full = os.path.join(TMP_PATCH_ROOT, name)
+        try:
+            if os.path.isfile(full) and os.path.getmtime(full) < cutoff:
+                os.remove(full)
+                removed.append(name)
+        except OSError:
+            continue
+    return removed
+
+
+def prune_artifacts(days: float = None) -> list:
+    """清掉 `run/artifacts` 下超过 N 天没动过的 `.log`，返回清掉的文件名。
+
+    只动产物（`<task_id>.log`），别的文件一概不碰；删不掉就跳过，不抛异常——
+    留档是证据，清不动最多是多占几 MB，不该把这一单带崩。
+    天数默认 `ARTIFACT_DAYS`（30 天），也可用 `MWP_ARTIFACT_DAYS` 覆盖。
+    """
+    if days is None:
+        env_days = os.environ.get("MWP_ARTIFACT_DAYS")
+        limit = float(env_days) if env_days and env_days.strip() else ARTIFACT_DAYS
+    else:
+        limit = float(days)
+    cutoff = time.time() - limit * 86400
+    removed = []
+    if not os.path.isdir(ARTIFACT_ROOT):
+        return removed
+    for name in os.listdir(ARTIFACT_ROOT):
+        if not name.endswith(".log"):
+            continue
+        full = os.path.join(ARTIFACT_ROOT, name)
         try:
             if os.path.isfile(full) and os.path.getmtime(full) < cutoff:
                 os.remove(full)
@@ -296,6 +328,7 @@ def run(goal: str, timeout: float = 120.0, patch_path: str = None,
     target_model = resolve_model(model)
     target_effort = resolve_effort(effort)
     prune_cache()
+    prune_artifacts()
     patch, _ = resolve_patch(target_model, template=patch_path, effort=target_effort)
     home = dsh_home()
     ensure_profile(profile)
