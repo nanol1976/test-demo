@@ -490,7 +490,11 @@ class WorkerAgent:
                                      effort=spec.get("reasoning_effort"),
                                      task_id=task_id)
         except dsh_adapter.DshError as exc:
-            self._reject(trace_id, task_id, f"adapter=dsh 起不来：{exc}")
+            if isinstance(exc, dsh_adapter.DshCapabilityError):
+                # 模型能力不够的单在本地就拒，回执里写明是"拒"而不是"起不来"
+                self._reject(trace_id, task_id, f"adapter=dsh 本地拒单：{exc}")
+            else:
+                self._reject(trace_id, task_id, f"adapter=dsh 起不来：{exc}")
             return
         finally:
             hb.stop()

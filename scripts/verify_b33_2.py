@@ -119,7 +119,7 @@ def main():
           "    model: " + dsh_adapter.DEFAULT_MODEL + "\n    reasoningEffort: high\n" in body_high)
     check("只写一处（不往 models 列表里乱塞）", body_high.count("reasoningEffort") == 1)
     check("同一组合第二次复用同一份缓存", dsh_adapter.resolve_patch(dsh_adapter.DEFAULT_MODEL, effort="high")[0] == p_high)
-    p_other, _ = dsh_adapter.resolve_patch("minimaxai/minimax-m3.1-flash", effort="low")
+    p_other, _ = dsh_adapter.resolve_patch("nvidia/llama-3.3-70b-instruct", effort="low")
     check("模型 + 思考档一起渲染（缓存名带档位）",
           os.path.basename(p_other).endswith("-low.yml"), os.path.basename(p_other))
     body_other = read(p_other)
@@ -221,6 +221,36 @@ def main():
             os.remove(path)
         except OSError:
             pass
+
+    print("\n=== 8) 按模型白名单拦思考档（Batch33-4） ===")
+    mm = "minimaxai/minimax-m3.1-flash"
+    check("实测名单里写了 minimax", "minimaxai/" in dsh_adapter.EFFORT_UNSUPPORTED_PREFIXES)
+    check("名单外模型按支持处理（不搞白名单硬拦）",
+          dsh_adapter.model_supports_effort("nvidia/llama-3.3-70b-instruct") is True)
+    check("nemotron 支持档位", dsh_adapter.model_supports_effort(dsh_adapter.DEFAULT_MODEL) is True)
+    check("minimax 不支持档位", dsh_adapter.model_supports_effort(mm) is False)
+    refused = ""
+    try:
+        dsh_adapter.guard_effort(mm, "high")
+    except dsh_adapter.DshCapabilityError as exc:
+        refused = str(exc)
+    check("minimax + high 在本地拒", bool(refused), refused[:60])
+    check("拒的理由说清是谁不支持", "不接受思考档" in refused and "UNSUPPORTED_REASONING_EFFORT" in refused)
+    check("minimax 不填档位照样放行（不误伤）", dsh_adapter.guard_effort(mm, "") == "")
+    check("nemotron + high 放行", dsh_adapter.guard_effort(dsh_adapter.DEFAULT_MODEL, "high") == "high")
+    patch_refused = False
+    try:
+        dsh_adapter.resolve_patch(mm, effort="medium")
+    except dsh_adapter.DshCapabilityError:
+        patch_refused = True
+    check("渲染 patch 这一层就拦住（不写出临时文件）", patch_refused)
+    check("拒的是 DshCapabilityError，仍是 DshError 子类（Worker 原样接得住）",
+          issubclass(dsh_adapter.DshCapabilityError, dsh_adapter.DshError))
+    os.environ["MWP_DSH_EFFORT_FORCE"] = "1"
+    check("MWP_DSH_EFFORT_FORCE=1 可临时放行（排障用）",
+          dsh_adapter.model_supports_effort(mm) is True)
+    os.environ.pop("MWP_DSH_EFFORT_FORCE", None)
+    check("放行开关拿掉后恢复拦截", dsh_adapter.model_supports_effort(mm) is False)
 
     print()
     if FAILED:

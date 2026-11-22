@@ -39,6 +39,12 @@ MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,80}$")
 # 思考档只认这几个词（dsh / 各家 provider 共用的口径），别的值一律拒。
 EFFORT_VALUES = ("minimal", "low", "medium", "high")
 
+# 实测确认"不接受 reasoningEffort"的模型前缀（Batch33-4）：
+# 选这类模型又填档位，就在本地直接拒，不把注定失败的单发给上游。
+# 名单只写真机验过的，扩表前必须拿真机跑一次；名单外的按"支持"处理（不搞白名单硬拦，
+# 免得新模型一上线就被误拒）。MWP_DSH_EFFORT_FORCE=1 可临时放行（排障用）。
+EFFORT_UNSUPPORTED_PREFIXES = ("minimaxai/", "minimax/")
+
 # 任务号会当文件名用，只允许这套字符，别的全部替换成下划线。
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
@@ -50,6 +56,11 @@ ARTIFACT_DAYS = 30.0
 
 
 class DshError(RuntimeError):
+    pass
+
+
+class DshCapabilityError(DshError):
+    """模型能力不够，本地就拒（不是"起不来"，也不是上游的错）。"""
     pass
 
 
@@ -210,6 +221,30 @@ def resolve_effort(effort: str = None) -> str:
     return ""
 
 
+def model_supports_effort(model: str) -> bool:
+    """这个模型收不收 reasoningEffort。只查实测名单，名单外的按支持处理。"""
+    value = str(model or "").strip().lower()
+    if os.environ.get("MWP_DSH_EFFORT_FORCE") == "1":
+        return True
+    return not any(value.startswith(prefix) for prefix in EFFORT_UNSUPPORTED_PREFIXES)
+
+
+def guard_effort(model: str, effort: str = None) -> str:
+    """模型和档位都定下来之后的最后一道闸：不支持就本地拒。
+
+    这么做不是为了省一次调用，而是为了"拒得清楚"——上游只会回一句
+    UNSUPPORTED_REASONING_EFFORT，看不出是谁选的模型、谁填的档位。
+    """
+    target_effort = check_effort(effort)
+    if target_effort and not model_supports_effort(model):
+        raise DshCapabilityError(
+            f"模型 {model} 不接受思考档，实测上游会回 UNSUPPORTED_REASONING_EFFORT；"
+            f"所以 {target_effort} 在本地就拒了：去掉 reasoning_effort，或换支持档位的模型"
+            f"（默认 {DEFAULT_MODEL} 已实测支持 high）"
+        )
+    return target_effort
+
+
 def resolve_patch(model: str = None, template: str = None, effort: str = None) -> tuple:
     """返回 (patch 路径, 是否临时生成)。
 
@@ -221,7 +256,7 @@ def resolve_patch(model: str = None, template: str = None, effort: str = None) -
     if not os.path.isfile(tmpl):
         raise DshError(f"NVIDIA patch 不存在：{tmpl}")
     target = resolve_model(model)
-    target_effort = check_effort(effort)
+    target_effort = guard_effort(target, effort)
     if target == DEFAULT_MODEL and not target_effort:
         return tmpl, False
     with open(tmpl, "r", encoding="utf-8") as fh:

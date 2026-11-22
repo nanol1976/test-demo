@@ -1015,6 +1015,25 @@ def stage_static():
           "reasoning_effort" in dsh_doc09 and "artifact_sha256" in dsh_doc09,
           "契约没写，下一个人只能靠猜")
 
+    # 1.8p Batch33-4：按模型拦思考档——不支持档位的模型，在本地就拒，不发注定失败的单。
+    check("Batch33-4 有一张实测名单（哪些模型不收 thinking 档）",
+          "EFFORT_UNSUPPORTED_PREFIXES" in dsh_adapter_py and "minimaxai/" in dsh_adapter_py,
+          "拦思考档却不知道拦谁，等于没拦")
+    check("Batch33-4 模型与档位定稿前过 guard_effort（不是让上游去拒）",
+          "def guard_effort" in dsh_adapter_py and "guard_effort(target, effort)" in dsh_adapter_py,
+          "只在 run() 里拦一处，别的入口照样能把注定失败的单发出去")
+    check("Batch33-4 拒单是 DshCapabilityError（跟起不来区分开）",
+          "class DshCapabilityError(DshError)" in dsh_adapter_py
+          and "isinstance(exc, dsh_adapter.DshCapabilityError)" in read(
+              os.path.join(ROOT, "worker", "agent_worker.py")),
+          "拒单和崩溃写同一句话，事后分不清是选错了还是坏了")
+    check("Batch33-4 名单外模型不硬拦（默认放行，不做支持白名单）",
+          "return not any(" in dsh_adapter_py and "SUPPORTED_MODELS" not in dsh_adapter_py,
+          "做成支持白名单，新模型一上线就被误拒")
+    check("Batch33-4 排障开关只认 MWP_DSH_EFFORT_FORCE（并写进契约）",
+          "MWP_DSH_EFFORT_FORCE" in dsh_adapter_py and "MWP_DSH_EFFORT_FORCE" in dsh_doc09,
+          "偷偷留后门，下次就没人知道它开着")
+
     # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
 
     # 不许各处自己拼 "data/STOP"；worker 只读标记，不写、不删。

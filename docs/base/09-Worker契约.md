@@ -113,6 +113,13 @@ POST /api/messages                                    # 报活 / 交活 / 报做
 - 不指定就不写这一行——仓库 patch 里本来没有 `reasoningEffort`，不替别的调用方定档。
 - 优先级：**`exec.reasoning_effort` > `MWP_DSH_EFFORT` > 不写**。缓存文件名带档位（`patch-<模型>-<档位>.yml`），同一组合复用，7 天没动过照样被 `prune_cache` 清掉。
 
+思考档要**按模型**给（Batch33-4）：
+
+- 不是每个模型都吃 `reasoningEffort`。实测 `minimaxai/minimax-m3.1-flash` 不接受，上游会回一句 `UNSUPPORTED_REASONING_EFFORT`；默认的 `nvidia/nemotron-3.5-lightning-30b-a3b` 支持（`high` 真机通过）。
+- 适配层留了一张**实测名单** `EFFORT_UNSUPPORTED_PREFIXES`：模型名落在这张名单里、又填了档位，**在本地就拒**（`DshCapabilityError`，Worker 回执写「adapter=dsh 本地拒单：…」），不会把注定失败的单发到上游再等它拒。
+- 名单外的模型**按支持处理**（默认放行），不做"支持白名单"——否则新模型一上线就被误拒。要往名单里加模型，必须先真机跑一次，拿上游原话当证据，不许"看着像"就加。
+- 排障可临时放行：`MWP_DSH_EFFORT_FORCE=1`（只给排障用，不许在常驻服务里设）。
+
 ## 二、报文格式（与 Master 同协议）
 
 ```json
