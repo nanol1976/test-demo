@@ -7,6 +7,7 @@
 """
 import base64
 import json
+import os
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -341,6 +342,69 @@ def _gate_plugin(db: Session, repo: LedgerRepository, envelope: Envelope,
         )
 
 
+# Batch34：dsh（外部执行队）也要守规矩 —— 必须有岗位、有并发配额、留审计。
+# dsh 单慢且贵，同实例上堆单只会互相拖死；默认一次只许 1 单在跑，MWP_DSH_MAX_INFLIGHT 可调。
+DSH_MAX_INFLIGHT = 1
+
+
+def dsh_max_inflight() -> int:
+    """单实例同时允许多少个 dsh 单（默认 1；环境变量非法就当默认，且下限 1）。"""
+    raw = os.environ.get("MWP_DSH_MAX_INFLIGHT")
+    if not raw:
+        return DSH_MAX_INFLIGHT
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DSH_MAX_INFLIGHT
+    return max(1, value)
+
+
+def _resolve_adapter(payload: Dict[str, Any]) -> str:
+    spec = payload.get("exec")
+    if not isinstance(spec, dict):
+        return ""
+    return str(spec.get("adapter") or "").strip().lower()
+
+
+def _gate_dsh(repo: LedgerRepository, envelope: Envelope, payload: Dict[str, Any],
+              target_worker: str, target_instance: str) -> None:
+    """dsh 单过闸：必须指定岗位 + 单实例并发配额。
+
+    判定无论 allow 还是 deny 都写一行审计（plugin_audit，追加不删）：
+    事后要能回答"这单为什么被拒/为什么放行"，而不是只有一句报错。
+    """
+    if _resolve_adapter(payload) != "dsh":
+        return
+    spec = payload.get("exec") if isinstance(payload.get("exec"), dict) else {}
+    model = str(spec.get("model") or "").strip() or "（默认模型）"
+    effort = str(spec.get("reasoning_effort") or "").strip() or "（不指定）"
+
+    def audit(decision: str, reason: str) -> None:
+        repo.record_plugin_audit(
+            trace_id=envelope.trace_id, task_id=envelope.task_id,
+            plugin_name="dsh", plugin_version="adapter",
+            worker_id=target_worker, instance_id=target_instance,
+            decision=decision, reason=reason,
+        )
+
+    if not target_instance:
+        audit("deny", "dsh 单没指定 target_instance（配额与产物归属都无从计算）")
+        raise IllegalTransitionError(
+            "task_dispatch 被拒：exec.adapter=dsh 必须指定 target_instance（如 ops-win / ops-mac），"
+            "否则不知道落在哪台机器，配额与产物归属都算不出来"
+        )
+    limit = dsh_max_inflight()
+    inflight = repo.count_inflight(target_worker, target_instance)
+    head = f"model={model} effort={effort} 实例={target_instance} 在跑 {inflight}/{limit}"
+    if inflight >= limit:
+        audit("deny", f"{head}：同实例 dsh 单已达配额上限（MWP_DSH_MAX_INFLIGHT={limit}）")
+        raise IllegalTransitionError(
+            f"task_dispatch 被拒：{head}，同实例 dsh 单已达上限"
+            f"（MWP_DSH_MAX_INFLIGHT={limit}），等当前那单跑完再派"
+        )
+    audit("allow", head)
+
+
 @_idempotent
 def handle_task_dispatch(db: Session, envelope: Envelope) -> HandlerResult:
     payload: Dict[str, Any] = envelope.payload or {}
@@ -358,6 +422,8 @@ def handle_task_dispatch(db: Session, envelope: Envelope) -> HandlerResult:
     plugin_name = _resolve_plugin(payload)
     if plugin_name:
         _gate_plugin(db, repo, envelope, payload, plugin_name, target_worker, target_instance)
+    # Batch34：dsh 单在这里过配额闸（没有岗位、超出并发都当场拒，拒单理由写审计）
+    _gate_dsh(repo, envelope, payload, target_worker, target_instance)
 
     pipeline = repo.get_pipeline(envelope.trace_id)
     if pipeline is None:

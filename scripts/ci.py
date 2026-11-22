@@ -861,7 +861,8 @@ def stage_static():
           "def run_probes" in plug_svc and "subprocess.run(" in plug_svc
           and "TimeoutExpired" in plug_svc and "probes.py" in plug_svc,
           "probes 没接到派发链上")
-    gate_body = dispatch32b.split("def _gate_plugin", 1)[-1]
+    # 只切 _gate_plugin 这一个函数体（Batch34 在它后面加了 _gate_dsh，别把两家的审计混着数）
+    gate_body = dispatch32b.split("def _gate_plugin", 1)[-1].split("\ndef ", 1)[0]
     check("Batch32-3 探针闸门只在授权放行后跑（没资格就不动执行环境）",
           gate_body.index("judge_plugin(") < gate_body.index("run_probes(")
           and 'if decision == "allow":' in gate_body,
@@ -1033,6 +1034,30 @@ def stage_static():
     check("Batch33-4 排障开关只认 MWP_DSH_EFFORT_FORCE（并写进契约）",
           "MWP_DSH_EFFORT_FORCE" in dsh_adapter_py and "MWP_DSH_EFFORT_FORCE" in dsh_doc09,
           "偷偷留后门，下次就没人知道它开着")
+
+    # 1.8q Batch34：dsh 挂进真实岗位——岗位必填、单实例并发配额、审计留痕（都在派单闸里）。
+    dispatch_py34 = read(os.path.join(ROOT, "app", "services", "dispatch.py"))
+    ledger_py34 = read(os.path.join(ROOT, "app", "repositories", "ledger.py"))
+    check("Batch34 dsh 单在派单前过闸（没岗位直接拒，不许落到默认实例）",
+          "def _gate_dsh" in dispatch_py34 and "必须指定 target_instance" in dispatch_py34,
+          "只写函数不调用，配额等于没设")
+    check("Batch34 闸在建流水线之前（被拒的单不建流水线、不占任务行）",
+          dispatch_py34.find("_gate_dsh(repo, envelope, payload, target_worker, target_instance)")
+          < dispatch_py34.find("pipeline = repo.get_pipeline(envelope.trace_id)"),
+          "先建流水线再拒单，拒一次就多一条孤儿流水线")
+    check("Batch34 单实例 dsh 并发有上限（默认 1，MWP_DSH_MAX_INFLIGHT 可调，下限 1）",
+          "DSH_MAX_INFLIGHT = 1" in dispatch_py34 and "max(1, value)" in dispatch_py34,
+          "没有上限，外部 agent 单可以无限堆")
+    check("Batch34 配额只数执行中 + adapter=dsh 的单（普通单不误伤）",
+          "def count_inflight" in ledger_py34 and 'spec.get("adapter")' in ledger_py34
+          and 'TaskLedger.status == "执行中"' in ledger_py34,
+          "把脚本单也算进外部队配额，等于把正常活挡了")
+    check("Batch34 派单判定写审计（allow 与 deny 都留痕）",
+          'audit("allow", head)' in dispatch_py34 and 'audit("deny"' in dispatch_py34,
+          "只记拒单，事后查不到放行依据")
+    check("Batch34 配额/审计不新增接口路径（铁律仍 11 条）",
+          not os.path.isfile(os.path.join(ROOT, "app", "api", "routes_quota.py")),
+          "为了查配额又开一条路径，等于偷偷扩接口面")
 
     # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
 

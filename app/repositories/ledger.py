@@ -2,6 +2,7 @@
 
 铁律：只允许追加与状态更新，任何删除/清空/批量覆盖都不提供。
 """
+import json
 from datetime import datetime, timezone
 from typing import List, Optional
 from sqlalchemy import func, or_, select
@@ -220,6 +221,29 @@ class LedgerRepository:
             TaskLedger.trace_id == trace_id, TaskLedger.status == status
         )
         return len(list(self.db.execute(stmt).scalars().all()))
+
+    def count_inflight(self, worker_id: str, instance_id: str) -> int:
+        """某执行方实例上正在跑的 dsh 单数（Batch34：dsh 并发配额用）。
+
+        只数 status=执行中、且载荷里 exec.adapter=dsh 的任务 —— 普通脚本单不占这个配额。
+        载荷是派发时原样落盘的 JSON（dispatch_payload），解析失败就跳过，绝不因为一行坏数据崩掉派单。
+        """
+        stmt = select(TaskLedger).where(
+            TaskLedger.status == "执行中",
+            TaskLedger.target_worker == worker_id,
+            TaskLedger.target_instance == instance_id,
+        )
+        rows = list(self.db.execute(stmt).scalars().all())
+        count = 0
+        for row in rows:
+            try:
+                payload = json.loads(row.dispatch_payload or "{}")
+            except (TypeError, ValueError):
+                continue
+            spec = payload.get("exec")
+            if isinstance(spec, dict) and str(spec.get("adapter") or "").strip().lower() == "dsh":
+                count += 1
+        return count
 
     def set_pause(self, trace_id: str, flag: bool) -> Optional[PipelineLedger]:
         row = self.db.get(PipelineLedger, trace_id)

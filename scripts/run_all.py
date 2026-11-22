@@ -53,6 +53,7 @@ SCRIPTS = [
     ("Batch32-2B 插件授权：实例>岗位>撤权 + 拒单审计", "verify_b32_2b.py"),
     ("Batch33 dsh 适配层：patch/key/env/退出码", "verify_b33.py"),
     ("Batch33-2 产物留档 + 思考档：落盘/哈希/接口", "verify_b33_2.py"),
+("Batch34 dsh 挂岗位：并发配额 + 审计留痕", "verify_b34.py"),
 ]
 
 
