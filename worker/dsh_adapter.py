@@ -32,6 +32,8 @@ DEFAULT_NAME = "nemotron-3.5-lightning-30b-a3b"
 TMP_PATCH_ROOT = os.path.join(ROOT, "run", "tmp_dsh")
 RUNTIME_HOME = os.path.join(ROOT, "run", "dsh_home")
 ARTIFACT_ROOT = os.path.join(ROOT, "run", "artifacts")
+# Batch36：到期产物搬来这里，不删。不进 git（仓库是 public，产物是模型原文）。
+ARCHIVE_ROOT = os.path.join(ROOT, "archive")
 
 # 模型 id 只允许这一套字符：slug、带一个斜杠的 owner/repo、带点/冒号/@ 的版本后缀。
 # 拦住 ../、空格、换行这些——它是写进 yml 的，不是拼 shell，但也不能当成路径或注入。
@@ -153,12 +155,22 @@ def prune_cache(days: float = None) -> list:
     return removed
 
 
-def prune_artifacts(days: float = None) -> list:
-    """清掉 `run/artifacts` 下超过 N 天没动过的 `.log`，返回清掉的文件名。
+def archive_dir_for(when=None) -> str:
+    """归档目录：`archive/YYYY-MM/`（按发生月份分，不按任务号分）。"""
+    stamp = when or time.localtime()
+    return os.path.join(ARCHIVE_ROOT, time.strftime("%Y-%m", stamp))
 
-    只动产物（`<task_id>.log`），别的文件一概不碰；删不掉就跳过，不抛异常——
-    留档是证据，清不动最多是多占几 MB，不该把这一单带崩。
-    天数默认 `ARTIFACT_DAYS`（30 天），也可用 `MWP_ARTIFACT_DAYS` 覆盖。
+
+def prune_artifacts(days: float = None) -> list:
+    """把 `run/artifacts` 下超过 N 天没动过的 `.log` **搬进** `archive/YYYY-MM/`，返回搬走的文件名。
+
+    Batch36 改口径：以前是真删文件，现在**一份都不删**——产物是证据，
+    过期只代表"不该再占着活动的产物目录"，不代表可以丢。搬走之后原目录干净、
+    归档目录里还能按月份翻回去对账。
+
+    只动产物（`<task_id>.log`），别的文件一概不碰；搬不动（有的机器拦移动/拦截删）
+    就跳过，不抛异常。天数默认 `ARTIFACT_DAYS`（30 天），也可用 `MWP_ARTIFACT_DAYS` 覆盖。
+    返回值语义不变：仍然是被处理掉（已离开活动目录）的文件名列表。
     """
     if days is None:
         env_days = os.environ.get("MWP_ARTIFACT_DAYS")
@@ -166,20 +178,29 @@ def prune_artifacts(days: float = None) -> list:
     else:
         limit = float(days)
     cutoff = time.time() - limit * 86400
-    removed = []
+    moved = []
     if not os.path.isdir(ARTIFACT_ROOT):
-        return removed
+        return moved
     for name in os.listdir(ARTIFACT_ROOT):
         if not name.endswith(".log"):
             continue
         full = os.path.join(ARTIFACT_ROOT, name)
         try:
-            if os.path.isfile(full) and os.path.getmtime(full) < cutoff:
-                os.remove(full)
-                removed.append(name)
-        except OSError:
+            if not os.path.isfile(full) or os.path.getmtime(full) >= cutoff:
+                continue
+            dest_dir = archive_dir_for()
+            os.makedirs(dest_dir, exist_ok=True)
+            dest = os.path.join(dest_dir, name)
+            # 同月里已有同名（任务号相同跑过两次），加时间戳后缀，绝不覆盖旧档
+            if os.path.exists(dest):
+                dest = os.path.join(
+                    dest_dir, f"{os.path.splitext(name)[0]}-{int(time.time())}.log"
+                )
+            shutil.move(full, dest)
+            moved.append(name)
+        except (OSError, shutil.Error):
             continue
-    return removed
+    return moved
 
 
 def check_model(model) -> str:

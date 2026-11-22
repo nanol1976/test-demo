@@ -94,6 +94,9 @@ class PipelineSummaryPage(BaseModel):
 class TaskPage(BaseModel):
     meta: PageMeta
     items: List[TaskView] = Field(default_factory=list)
+    # Batch36：口径账（字段不是路径——接口仍是 11 条，只是返回体多一个字段）。
+    # 由 scripts/ledger_metrics.py 同一份实现算出，看板与脚本因此天然同源。
+    metrics: Optional[Dict[str, Any]] = None
 
 
 class ExportPayload(BaseModel):

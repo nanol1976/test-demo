@@ -189,7 +189,7 @@ def main():
     except Exception as exc:  # 缺依赖时如实报红，不假装通过
         check(f"平台产物索引可导入（{type(exc).__name__}）", False, str(exc)[:80])
 
-    print("\n=== 7) 产物按天清理（Batch33-3） ===")
+    print("\n=== 7) 产物按天到期搬进 archive（Batch33-3，Batch36 改成搬走不删） ===")
     import time as _time
     fresh = os.path.join(dsh_adapter.ARTIFACT_ROOT, "t-b332-fresh.log")
     stale = os.path.join(dsh_adapter.ARTIFACT_ROOT, "t-b332-stale.log")
@@ -200,23 +200,43 @@ def main():
     old_ts = _time.time() - 40 * 86400
     os.utime(stale, (old_ts, old_ts))
     os.utime(keeper, (old_ts, old_ts))
-    removed = dsh_adapter.prune_artifacts()
-    check("新鲜产物不被选中", "t-b332-fresh.log" not in removed, str(removed)[:60])
-    check("超过 30 天的产物被选中清理", "t-b332-stale.log" in removed, str(removed)[:60])
-    check("非 .log 文件一概不动", "t-b332-keep.txt" not in removed)
-    check("清产物不抛异常（删不掉也算过）", isinstance(removed, list), str(removed)[:60])
-    # 有的环境（比如这台机器的沙箱）删文件会"假装成功"，所以"文件是否真的消失"只作宽容记录
-    if os.path.isfile(stale):
-        print("  [NOTE] 本机 os.remove 返回成功但文件仍在（沙箱拦删除），符合已知环境限制")
+    arch_dir = dsh_adapter.archive_dir_for()
+    moved = dsh_adapter.prune_artifacts()
+    check("新鲜产物不被搬走", "t-b332-fresh.log" not in moved, str(moved)[:60])
+    check("超过 30 天的产物被搬走", "t-b332-stale.log" in moved, str(moved)[:60])
+    check("非 .log 文件一概不动", "t-b332-keep.txt" not in moved)
+    check("搬产物不抛异常（搬不动也算过）", isinstance(moved, list), str(moved)[:60])
+    check("归档目录按月建 archive/YYYY-MM",
+          os.path.basename(arch_dir).count("-") == 1 and len(os.path.basename(arch_dir)) == 7,
+          arch_dir)
+    # 沙箱会"假装成功"或直接拦移动，所以"文件到底在哪"只作宽容记录；
+    # 但"不许删"这一条是硬的：源码里不能有 os.remove 处理产物。
+    src = read(os.path.join(ROOT, "worker", "dsh_adapter.py"))
+    seg = src.split("def prune_artifacts", 1)[1].split("\ndef ", 1)[0]
+    check("到期产物只搬不删（该段里没有 os.remove）", "os.remove" not in seg)
+    check("搬到归档目录（该段里用 shutil.move 指向 ARCHIVE_ROOT）",
+          "shutil.move" in seg and "archive_dir_for" in seg)
+    archived = os.path.join(arch_dir, "t-b332-stale.log")
+    if os.path.isfile(stale) or not os.path.isfile(archived):
+        print("  [NOTE] 本机移动被拦（沙箱），原件/归档位置以源码为准；不当作失败")
+    else:
+        check("原件已离开活动产物目录，归档里留着一份", True)
+        try:
+            with open(archived, encoding="utf-8") as fh:
+                check("归档内容原样（没被截断或改写）", fh.read() == "x")
+        except OSError:
+            check("归档文件读得回来", False)
     check("天数可被 MWP_ARTIFACT_DAYS 覆盖",
           dsh_adapter.ARTIFACT_DAYS == 30.0 and "MWP_ARTIFACT_DAYS" in read(
               os.path.join(ROOT, "worker", "dsh_adapter.py")))
     os.environ["MWP_ARTIFACT_DAYS"] = "0"
-    removed2 = dsh_adapter.prune_artifacts()
+    moved2 = dsh_adapter.prune_artifacts()
     check("环境变量设 0 天 → 连新鲜的也被选中（说明开关真的生效）",
-          "t-b332-fresh.log" in removed2, str(removed2)[:60])
+          "t-b332-fresh.log" in moved2, str(moved2)[:60])
     os.environ.pop("MWP_ARTIFACT_DAYS", None)
-    for path in (fresh, stale, keeper):
+    # 清掉这次验收自己造的三份临时档（活动目录与归档目录各扫一遍），别把测试垃圾留在账上
+    for path in (fresh, stale, keeper, os.path.join(arch_dir, "t-b332-fresh.log"),
+                 archived):
         try:
             os.remove(path)
         except OSError:

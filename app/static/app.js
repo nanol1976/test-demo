@@ -922,6 +922,88 @@ function renderRegistry(workers) {
 let lastWorkers = [];
 let lastPipes = { items: [], meta: {} };   // Batch26：快照导出要用当前页数据
 
+/* ---------- 本周账（Batch36） ----------
+   数字一律来自 /api/tasks 的 metrics 字段（服务端与 scripts/ledger_metrics.py 同源），
+   前端只负责排版，不做任何二次计算——一算两处就会有两套数。 */
+function pct(p) {
+  if (!p) return "—";
+  if (p.rate === null || p.rate === undefined) return `—（${p.ok}/${p.decided} 定案）`;
+  return `${p.rate}%（${p.ok}/${p.decided} 定案${p.other ? `，另 ${p.other} 张未定案` : ""}）`;
+}
+
+function secText(s) {
+  if (s === null || s === undefined) return "—";
+  const n = Number(s);
+  // 一分钟以内保留一位小数：中位 2.3s 显示成 2s 会让人以为口径粗
+  if (n < 60) return `${n.toFixed(1)}s`;
+  return fmtDur(n * 1000);
+}
+
+function renderMetrics(m) {
+  const wrap = el("metricsWrap");
+  if (!wrap) return;
+  const note = el("metricsCount");
+  if (!m) {
+    wrap.innerHTML = `<div class="empty">口径账没算出来（接口降级返回了空账，任务列表本身不受影响）</div>`;
+    if (note) note.textContent = "";
+    return;
+  }
+  const t = m.totals || {};
+  const dur = m.duration || {};
+  const pol = m.policy || {};
+  const art = m.artifacts || {};
+  const ex = m.excluded || {};
+  const dsh = m.dsh || {};
+  const inst = m.instances || [];
+  const rv = m.review || {};
+
+  if (note) {
+    note.textContent = `真活 ${t.real || 0} / 测试 ${t.test || 0}`;
+  }
+
+  const jobRows = inst.length
+    ? inst.map((it) => `<dt>${esc(it.instance)}</dt><dd>${it.pass.orders} 单 · 通过率 ${esc(pct(it.pass))}`
+        + (it.duration && it.duration.samples ? ` · 中位 ${secText(it.duration.median_s)}` : "")
+        + `</dd>`).join("")
+    : `<dt>岗位</dt><dd class="muted">真活单为 0，暂无岗位账（测试单的岗位分布没有评价意义）</dd>`;
+
+  const modelRows = Object.keys(dsh.models || {}).length
+    ? `<dt>模型</dt><dd>${Object.entries(dsh.models).map(([k, v]) => `${esc(k)} × ${v}`).join("，")}</dd>
+       <dt>思考档</dt><dd>${Object.entries(dsh.efforts || {}).map(([k, v]) => `${esc(k)} × ${v}`).join("，")}</dd>`
+    : `<dt>dsh</dt><dd class="muted">没有 dsh 单</dd>`;
+
+  wrap.innerHTML = `
+    <dl class="kv">
+      <dt>单量</dt><dd>全部 ${t.orders || 0} 单 · 真活 ${t.real || 0} · 测试 ${t.test || 0}</dd>
+      <dt>通过率</dt><dd>真活 ${esc(pct((m.pass_rate || {}).real))} ｜ 全部 ${esc(pct((m.pass_rate || {}).all))}</dd>
+      <dt>耗时</dt><dd>${dur.samples ? `${dur.samples} 单有起止 · 中位 ${secText(dur.median_s)} · 均值 ${secText(dur.mean_s)} · 最长 ${secText(dur.max_s)}` : "无起止样本"}</dd>
+      ${jobRows}
+      <dt>dsh</dt><dd>${dsh.orders || 0} 单 · 通过率 ${esc(pct(dsh.pass))}${dsh.duration && dsh.duration.samples ? ` · 中位 ${secText(dsh.duration.median_s)}` : (dsh.orders ? " · 耗时样本 0（老 dsh 回执没落起止），成本只按单量排" : "")}</dd>
+      ${modelRows}
+      <dt>产物</dt><dd>${art.files || 0} 份 / ${art.bytes || 0} B${art.max_bytes ? ` / 最大 ${art.max_bytes} B` : ""}</dd>
+      <dt>复核</dt><dd>pass ${rv.pass || 0} · fail ${rv.fail || 0} · 未定 ${rv.unreviewed || 0}</dd>
+      <dt>剔除</dt><dd>${ex.count || 0} 张（前缀 ${ex.by_prefix || 0} / 白名单 ${ex.by_whitelist || 0}）${ex.task_ids && ex.task_ids.length ? `<br><span class="muted mono">${esc(ex.task_ids.slice(0, 6).join("、"))}${ex.task_ids.length > 6 ? ` … 其余 ${ex.task_ids.length - 6} 张` : ""}</span>` : ""}</dd>
+      <dt>评价</dt><dd><span class="tag ${pol.evaluable ? "ok" : "warn"}">${pol.evaluable ? "已启用" : "未启用"}</span></dd>
+      <dt>口径</dt><dd class="muted">${esc(pol.test_prefix || "")} 前缀 + ${esc(pol.whitelist_file || "")}；真活 ${pol.real_orders || 0} 张${pol.why_not_evaluable ? `，${esc(pol.why_not_evaluable)}` : ""}</dd>
+    </dl>`;
+}
+
+async function loadMetrics() {
+  const wrap = el("metricsWrap");
+  if (!wrap) return;
+  try {
+    // size=1 只为少跑点分页，metrics 是整表算的，跟这一页取几条无关
+    const r = await api(`${ROUTES.tasks}?page=1&size=1`);
+    if (!r.ok) {
+      wrap.innerHTML = `<div class="empty">口径账读取失败：${r.status}</div>`;
+      return;
+    }
+    renderMetrics(r.body.metrics || null);
+  } catch (e) {
+    wrap.innerHTML = `<div class="empty">口径账请求异常：${esc(e)}</div>`;
+  }
+}
+
 async function loadWorkers() {
   // Batch13：优先读执行方注册表；平台老版本（没有该接口）时退回按任务聚合。
   try {
@@ -1113,6 +1195,7 @@ async function refreshOnce() {
     await checkHealth();
     await loadWorkers();
     await loadAudit();
+    await loadMetrics();
     await loadPipelines();
     if (state.trace) await loadDetail(state.trace, { silent: true });
     markRefreshed();
@@ -1398,6 +1481,8 @@ function bind() {
     // Batch28 补：以前这里漏了审计面板，点完「记住」运维审计还挂上一次的 401 文字，
     // 看上去像按钮没反应。连同审计一起刷新，并给一个看得见的按钮反馈。
     loadAudit();
+    // Batch36：口径账也一并刷新（换口令会换权限，账一般不变，但不留旧数字在屏上）
+    loadMetrics();
     const btn = el("saveToken");
     if (btn && !btn.dataset.busy) {
       btn.dataset.busy = "1";
@@ -1487,6 +1572,7 @@ applyMode();
 checkHealth();
 loadWorkers();
 loadAudit();
+loadMetrics();
 loadPipelines();
 setAutoRefresh(localStorage.getItem(AUTO_KEY) || 0);
 

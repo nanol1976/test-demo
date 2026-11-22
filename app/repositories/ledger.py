@@ -200,6 +200,14 @@ class LedgerRepository:
         stmt = select(TaskLedger).where(TaskLedger.status == status)
         return list(self.db.execute(stmt).scalars().all())
 
+    def all_tasks(self) -> List[TaskLedger]:
+        """Batch36：整表只读取出（口径统计用；不看分页、不看筛选）。
+
+        只读，不改任何行。台账是"公司账本"，算账必须能看到全量——
+        拿一页 20 条算通过率，等于用抽样当全量。
+        """
+        return list(self.db.execute(select(TaskLedger)).scalars().all())
+
     def last_heartbeat_at(self, task_id: str):
         from app.models import MessageArchive
 

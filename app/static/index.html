@@ -37,6 +37,12 @@
       <div id="workerTableWrap"><div class="empty">加载中…</div></div>
     </div>
 
+    <div class="panel" id="metricsPanel">
+      <h2>本周账<span class="count" id="metricsCount"></span></h2>
+      <details class="hint"><summary>这块是怎么算的（Batch36）</summary><p>数字全部来自 <span class="mono">GET /api/tasks</span> 返回体里的 <span class="mono">metrics</span> 字段，和 <span class="mono">python scripts/ledger_metrics.py</span> 是<b>同一份实现</b>——改口径只改那个文件，看板跟着变，不需要人对着两处数字比。<br><b>测试单</b>=任务号带 <span class="mono">t-bN…</span> 前缀，或列在白名单 <span class="mono">config/test_orders.txt</span> 里；测试单默认不计入评价，但会列出剔掉了哪些，不许"大概不算它"。<b>通过率</b>=验收通过 ÷（通过 + 驳回 + 失败）。<b>耗时</b>取中位。dsh 的<b>成本是估算</b>：只有「模型 + 档位 + 耗时」，回执里没有 token，别当账单看。真活单不到 <span class="mono">30</span> 张时只出账、不出评价。</p></details>
+      <div id="metricsWrap"><div class="empty">加载中…</div></div>
+    </div>
+
     <div class="panel" id="auditPanel">
       <h2>运维审计<span class="count" id="auditCount"></span></h2>
       <details class="hint"><summary>「生效」是怎么判的</summary><p>最近 20 条运维动作（配额下发 / 暂停 / 恢复 / 复位熔断），来自 <span class="mono">GET /api/audit</span>。<b>生效</b>只针对最新一条配额下发：期望值已写进注册表、且 Worker 自报的并发已等于它才算「已生效」；历史行与流水线指令不判生效（记为 —）。</p></details>

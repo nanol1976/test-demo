@@ -27,6 +27,10 @@ from app.core.logging import get_logger
 from app.core.security import require_token
 from app.repositories.ledger import LedgerRepository
 
+# Batch36：口径账。脚本与接口共用这一份实现，看板不自己另算一遍。
+# 用按路径加载（不把 scripts 变成包），这样 `python scripts/ledger_metrics.py` 仍能单跑。
+_METRICS = {}
+
 logger = get_logger(__name__)
 
 router = APIRouter(dependencies=[Depends(require_token)])
@@ -133,7 +137,33 @@ def list_tasks(
     return TaskPage(
         meta=PageMeta(total=total, page=page, size=size, pages=max(1, -(-total // size))),
         items=[_task_view(t) for t in items],
+        metrics=_metrics_for(repo),
     )
+
+
+def _load_metrics_module():
+    """按路径加载 scripts/ledger_metrics.py，全进程只加载一次（口径只有一份）。"""
+    mod = _METRICS.get("mod")
+    if mod is None:
+        import importlib.util
+        import os
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        spec = importlib.util.spec_from_file_location(
+            "ledger_metrics", os.path.join(root, "scripts", "ledger_metrics.py")
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _METRICS["mod"] = mod
+    return mod
+
+
+def _metrics_for(repo):
+    """整表算一遍口径账。算不出来就返回 None——账算不清，不能把列表也拖挂。"""
+    try:
+        return _load_metrics_module().build(repo.all_tasks())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("metrics 计算失败（列表照常返回）: %s", exc)
+        return None
 
 
 @router.get(

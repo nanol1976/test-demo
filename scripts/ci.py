@@ -1001,10 +1001,11 @@ def stage_static():
     check("Batch33-2 看不到产物就不写路径（不编）",
           'art.get("path") or None' in read(os.path.join(ROOT, "app", "api", "routes_messages.py")),
           "查不到就编，等于把台账当小说写")
-    check("Batch33-2 产物有按天清理（默认 30 天，只清 .log，删不掉不抛）",
+    check("Batch36 产物到期只搬不删（进 archive/YYYY-MM，原目录清空但证据还在）",
           "def prune_artifacts" in dsh_adapter_py and "ARTIFACT_DAYS = 30.0" in dsh_adapter_py
-          and "prune_artifacts()" in dsh_adapter_py and 'endswith(".log")' in dsh_adapter_py,
-          "产物只增不删，迟早把磁盘塞满")
+          and "prune_artifacts()" in dsh_adapter_py and 'endswith(".log")' in dsh_adapter_py
+          and "shutil.move" in dsh_adapter_py and "ARCHIVE_ROOT" in dsh_adapter_py,
+          "到期产物被删掉了，对账时找不到原件")
     check("Batch33-2 产物全文走已有路径 + 查询参数（不新增路径）",
           "include_artifact" in read(os.path.join(ROOT, "app", "api", "routes_messages.py"))
           and "include_artifact=true" in app_js33_2,
@@ -1085,6 +1086,42 @@ def stage_static():
     check("Batch35 验收脚本按 run_all 口径输出结论",
           "全部通过" in b35_src,
           "run_all 只认「全部通过」四个字，写「全绿」会被 CI 判红")
+
+    # 1.8b6 Batch36：口径账——"像公司一样管"的第一块地基：账只有一份，看板和脚本不许各算一套。
+    # 红线守「单一实现、不新增路径、测试单可复算、样本不够不评价、不加库列、归档不删」。
+    metrics_py36 = read(os.path.join(ROOT, "scripts", "ledger_metrics.py"))
+    queries_py36 = read(os.path.join(ROOT, "app", "api", "routes_queries.py"))
+    schemas_py36 = read(os.path.join(ROOT, "app", "api", "schemas_http.py"))
+    index_html36 = read(os.path.join(ROOT, "app", "static", "index.html"))
+    app_js36 = read(os.path.join(ROOT, "app", "static", "app.js"))
+    models_py36 = read(os.path.join(ROOT, "app", "models", "__init__.py"))
+    check("Batch36 口径只有一份实现（脚本就是接口用的那份）",
+          "def build(" in metrics_py36 and "def render(" in metrics_py36
+          and "_load_metrics_module" in queries_py36 and "metrics=_metrics_for(repo)" in queries_py36,
+          "看板自己再算一遍，两处数字迟早对不上")
+    check("Batch36 口径账不新增接口路径（接口面仍 11 条）",
+          "metrics: Optional[Dict[str, Any]]" in schemas_py36
+          and not os.path.isfile(os.path.join(ROOT, "app", "api", "routes_metrics.py")),
+          "为了一块账多开一条路径，等于偷偷扩容接口面")
+    check("Batch36 测试单靠前缀 + 白名单剔除（不许凭印象算）",
+          'TEST_PREFIX = re.compile(r"t-b\\d+")' in metrics_py36
+          and os.path.isfile(os.path.join(ROOT, "config", "test_orders.txt"))
+          and "def is_test(" in metrics_py36,
+          "测试单混进评价，通过率就是自欺欺人")
+    check("Batch36 真活单不到 30 张只出账不出评价",
+          "MIN_EVAL_ORDERS = 30" in metrics_py36 and '"evaluable"' in metrics_py36,
+          "样本太少还出评价，等于给噪音盖章")
+    check("Batch36 账里明写剔除了哪些单（可复算）",
+          '"excluded"' in metrics_py36 and '"by_prefix"' in metrics_py36
+          and '"task_ids"' in metrics_py36,
+          "只说剔了 40 张、不列单号，没法复核")
+    check("Batch36 看板「本周账」读接口字段、不自己算",
+          'id="metricsPanel"' in index_html36 and "function loadMetrics(" in app_js36
+          and "renderMetrics(r.body.metrics" in app_js36 and "lastMetrics" not in app_js36,
+          "前端另算一套，改口径时就会漏改一处")
+    check("Batch36 不加库列（台账结构没动，迁移仍是 v12）",
+          "priority" not in models_py36 and "sla" not in models_py36.lower(),
+          "为了排序顺手加列，就要先征得同意并动迁移")
 
     # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
 
