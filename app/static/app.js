@@ -430,8 +430,10 @@ function renderArtifactChip(td, t) {
   let chip = td.querySelector(".art-chip");
   if (!t.artifact && !t.artifact_error) { if (chip) chip.remove(); return; }
   if (!chip) {
-    chip = document.createElement("span");
+    chip = document.createElement("a");
     chip.className = "art-chip";
+    chip.href = "#";
+    chip.addEventListener("click", (ev) => { ev.preventDefault(); showArtifact(t.task_id); });
     td.appendChild(chip);
   }
   if (t.artifact) {
@@ -442,6 +444,49 @@ function renderArtifactChip(td, t) {
     chip.className = "art-chip art-chip-warn";
     chip.textContent = "产物未留档";
     chip.title = t.artifact_error || "Worker 没有写产物文件";
+  }
+}
+
+/* Batch33-2：点开产物。走已有路径 `GET /api/tasks/{id}?include_artifact=true`，
+   不新增接口；口令仍放请求头，不进 URL。 */
+async function showArtifact(taskId) {
+  const wrap = el("taskTableWrap");
+  if (!wrap) return;
+  let box = document.getElementById("artifactBox");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "artifactBox";
+    box.className = "artifact-box";
+    wrap.parentNode.insertBefore(box, wrap.nextSibling);
+  }
+  box.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "artifact-head";
+  const label = document.createElement("span");
+  label.className = "mono";
+  label.textContent = `产物 · ${taskId}`;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "btn-mini";
+  close.textContent = "关闭";
+  close.addEventListener("click", () => box.remove());
+  head.appendChild(label);
+  head.appendChild(close);
+  const pre = document.createElement("pre");
+  pre.className = "artifact-body";
+  pre.textContent = "读取中…";
+  box.appendChild(head);
+  box.appendChild(pre);
+  try {
+    const r = await api(`${ROUTES.tasks}/${encodeURIComponent(taskId)}?include_artifact=true`);
+    if (!r.ok) {
+      pre.textContent = `读不到（${r.status}）：${(r.body && r.body.detail) || JSON.stringify(r.body)}`;
+      return;
+    }
+    const txt = r.body && r.body.artifact_text;
+    pre.textContent = txt || "这台平台机器上读不到产物全文（产物在执行方那台机器上），回到执行方打开 run/artifacts/" + taskId + ".log";
+  } catch (e) {
+    pre.textContent = `请求异常：${e}`;
   }
 }
 

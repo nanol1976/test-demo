@@ -44,6 +44,9 @@ class TaskView(BaseModel):
     artifact_bytes: Optional[int] = None
     # artifact_error：Worker 写档失败时的原因（写不进去不影响这一单的结论）
     artifact_error: Optional[str] = None
+    # artifact_text：只在 `GET /api/tasks/{task_id}?include_artifact=true` 时带回全文
+    #（列表接口永远不填，免得把列表撑成下载站）
+    artifact_text: Optional[str] = None
 
 
 class PipelineView(BaseModel):

@@ -168,6 +168,9 @@ def main():
     check("接口路径仍是 11 条", len(paths) == 11, f"{len(paths)} 条：{sorted(paths)}")
     js_src = read(os.path.join(ROOT, "app", "static", "app.js"))
     check("看板按 TaskView 字段显示产物签", "renderArtifactChip" in js_src)
+    check("点开产物走已有路径 + include_artifact（不新增路径）",
+          "include_artifact=true" in js_src and "ROUTES.tasks}/" in js_src)
+    check("单任务接口支持 include_artifact", "include_artifact" in rm_src)
     check("看板不为产物发请求（不新增接口）", "ROUTES.artifacts" not in js_src)
     check("未留档单独标黄（写档失败不许装没事）",
           "art-chip-warn" in js_src and "art-chip-warn" in read(os.path.join(ROOT, "app", "static", "style.css")))
@@ -179,6 +182,10 @@ def main():
         check("索引里的大小跟文件一致",
               got.get(task_id, {}).get("bytes") == os.path.getsize(full), str(got.get(task_id)))
         check("没产物的任务不会凭空出现", "t-b332-nope" not in got)
+        txt = art_svc.read_text(task_id)
+        check("全文读得回来（含 stdout 段）", "answer=42" in txt, txt[:40])
+        check("查不存在的任务返回空串（不抛）", art_svc.read_text("t-b332-nope") == "")
+        check("超长会截断并标注", "（已截断" in art_svc.read_text(task_id, max_chars=20))
     except Exception as exc:  # 缺依赖时如实报红，不假装通过
         check(f"平台产物索引可导入（{type(exc).__name__}）", False, str(exc)[:80])
 

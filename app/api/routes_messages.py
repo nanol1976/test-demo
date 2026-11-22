@@ -6,7 +6,7 @@
 import json
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -221,11 +221,19 @@ def get_pipeline(trace_id: str, db: Session = Depends(get_db)) -> PipelineView:
 
 
 @router.get("/tasks/{task_id}", response_model=TaskView)
-def get_task(task_id: str, db: Session = Depends(get_db)) -> TaskView:
+def get_task(task_id: str, include_artifact: bool = Query(False),
+             db: Session = Depends(get_db)) -> TaskView:
+    """单任务详情。`include_artifact=true` 时额外带回产物全文（Batch33-2）。
+
+    走已有路径 + 查询参数，**不新增接口路径**；端口令与列表一致，只读。
+    """
     task = LedgerRepository(db).get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
-    return _task_view(task)
+    view = _task_view(task)
+    if include_artifact and view.artifact:
+        view.artifact_text = artifacts.read_text(task_id)
+    return view
 
 
 @router.get("/archive/{trace_id}", response_model=ArchiveView)

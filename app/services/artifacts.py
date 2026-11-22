@@ -57,3 +57,22 @@ def scan() -> dict:
 
 def lookup(task_id: str) -> dict:
     return scan().get(str(task_id or ""), {})
+
+
+def read_text(task_id: str, max_chars: int = 8000) -> str:
+    """读本机产物全文（超长截断并标注）；读不到返回空串，绝不抛给调用方。
+
+    只读 `scan()` 认得的 task_id，别的任务号一律当没有——不按拼接路径去试探。
+    """
+    info = lookup(task_id)
+    if not info:
+        return ""
+    full = os.path.join(ARTIFACT_DIR, os.path.basename(info["path"]))
+    try:
+        with open(full, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return ""
+    if len(text) > max_chars:
+        text = text[:max_chars] + f"\n\n…（已截断，全文 {len(text)} 字符，见 {info['path']}）\n"
+    return text

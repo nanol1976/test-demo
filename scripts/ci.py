@@ -1000,6 +1000,10 @@ def stage_static():
     check("Batch33-2 看不到产物就不写路径（不编）",
           'art.get("path") or None' in read(os.path.join(ROOT, "app", "api", "routes_messages.py")),
           "查不到就编，等于把台账当小说写")
+    check("Batch33-2 产物全文走已有路径 + 查询参数（不新增路径）",
+          "include_artifact" in read(os.path.join(ROOT, "app", "api", "routes_messages.py"))
+          and "include_artifact=true" in app_js33_2,
+          "为了看全文又开了新路径，等于把接口面偷偷扩了")
     check("Batch33-2 看板有产物签，且不为它发请求",
           "renderArtifactChip" in app_js33_2 and "ROUTES.artifacts" not in app_js33_2,
           "看板显示产物要么走新接口，要么干脆没有")
