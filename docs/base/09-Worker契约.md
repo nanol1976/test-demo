@@ -133,6 +133,19 @@ POST /api/messages                                    # 报活 / 交活 / 报做
 - **流水线照旧**：dsh 单跟其他单一同进流水线、回传落「待验收」、由签收推进到「验收通过」；配额与审计都不新增接口路径（接口面仍 11 条）。
 - **命令从哪来**：Windows 认 `%APPDATA%\npm\dsh.cmd`；Linux/macOS 先认 `~/.dsh/profiles/node_modules/.../bin.js`，找不到就退到 PATH 上的 `dsh`（云主机就是全局 npm 装的），都不行才报错——不逼每台机器都先设 `MWP_DSH_CMD`。
 
+### 一·补六 产物跨机可见：随回执回传（Batch35）
+
+dsh 扩到第二台机器（`ops-mac`）后，第一单就把一个旧假设打穿了：任务行有、审计有，产物抽屉却是空的。
+
+- **问题**：`run/artifacts/<task_id>.log` 是**执行方那台机器**上的文件，平台自己的 `scan()` 只扫本机 `run/artifacts`，跨机单自然查不到。
+- **做法**：Worker 回执里带 `output.artifact_text`（产物全文，超 **8000** 字截断并置 `artifact_truncated=true`）和 `artifact_instance`（哪台机器产出的）；平台在处理 `task_return` 时，本机没有同名产物就补一份 `run/artifacts/<task_id>.log`。
+- **结果**：产物签、抽屉、`GET /api/tasks/{id}?include_artifact=true` 三处一行都不用改，接口面仍 **11 条**；看板看到的与同机执行时完全一致。
+- **三条自律**：
+  1. 只回传 `run/artifacts/` 下的产物，拒绝 `..`——不给 Worker 开读全盘的口子；
+  2. 超长截断——大产物不许把报文撑爆；
+  3. 本机已有同名产物就不覆盖——同机执行时 Worker 自己写的那份才是原始字节。任务号不合规（带斜杠、以点开头）一律不落盘。
+- **边界**：跨机看到的是**回执里带回来的副本**，不是远端磁盘的实时读取；要核对远端真实文件仍得上那台机器。
+
 ## 二、报文格式（与 Master 同协议）
 
 ```json

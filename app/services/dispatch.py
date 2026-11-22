@@ -22,6 +22,7 @@ from app.models import MessageArchive
 from app.repositories.ledger import PIPELINE_STATUSES, LedgerRepository
 from app.schemas import Envelope, MsgType, Sender
 from app.services import ArchiveService
+from app.services import artifacts
 
 logger = get_logger(__name__)
 
@@ -710,6 +711,28 @@ def _finish_review(db: Session, repo: LedgerRepository, review_task,
     )
 
 
+def _persist_remote_artifact(task_id: str, payload: Dict[str, Any]) -> None:
+    """Batch35：执行方不在本机时，把回执里带回来的产物全文补一份本地副本。
+
+    为什么需要：`run/artifacts/<task_id>.log` 是**执行方那台机器**上的文件，
+    平台自己的 `scan()` 只看本机目录，跨机单就会"有产物但抽屉是空的"。
+    这里只认回执 `output.artifact_text`（截过的也照收，头六行可读），
+    本机已有同名文件就跳过——同机执行时 Worker 自己写的那份才算原始字节。
+    """
+    out = payload.get("output") if isinstance(payload, dict) else None
+    if not isinstance(out, dict):
+        return
+    text = out.get("artifact_text")
+    if not isinstance(text, str) or not text.strip():
+        return
+    if artifacts.lookup(task_id).get("bytes"):
+        return
+    saved = artifacts.save(task_id, text)
+    if saved.get("bytes"):
+        logger.info("远端产物已落本机 task=%s bytes=%s 来自实例=%s",
+                    task_id, saved.get("bytes"), out.get("artifact_instance") or "-")
+
+
 @_idempotent
 def handle_task_return(db: Session, envelope: Envelope) -> HandlerResult:
     repo = LedgerRepository(db)
@@ -742,6 +765,7 @@ def handle_task_return(db: Session, envelope: Envelope) -> HandlerResult:
     if isinstance(done_instance, str) and done_instance.strip():
         repo.mark_done_instance(envelope.task_id, done_instance.strip())
     repo.update_task_status(envelope.task_id, "待验收")
+    _persist_remote_artifact(envelope.task_id, payload)
     note = "任务已回传，状态：待验收"
     if task.target_instance and done_instance and done_instance.strip() != task.target_instance:
         # 指定了岗位却被别人干了：不改状态（成果真实有效），但在回执里当场点出来

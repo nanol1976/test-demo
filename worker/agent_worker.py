@@ -38,6 +38,28 @@ from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
+ARTIFACT_INLINE_MAX = 8000
+
+
+def _read_artifact_text(work_dir, rel_path):
+    """Batch35：把落盘的产物读成文本，随回执带回平台。
+
+    只读 `run/artifacts/` 下的相对路径；读不到就返回空串（不阻断这一单的结论），
+    超长截到 ARTIFACT_INLINE_MAX 字，并用第二个返回值标明"截过"。
+    """
+    rel = str(rel_path or "").replace("\\", "/").strip()
+    if not rel.startswith("run/artifacts/") or ".." in rel:
+        return "", False
+    full = os.path.join(work_dir or ROOT, rel)
+    try:
+        with open(full, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return "", False
+    if len(text) > ARTIFACT_INLINE_MAX:
+        return text[:ARTIFACT_INLINE_MAX], True
+    return text, False
+
 
 # Batch33：DSH 适配层与本文件同目录，脚本方式启动时 sys.path[0] 就是 worker/；
 # 被测试按包导入时补一次，避免 import 失败。
@@ -506,6 +528,9 @@ class WorkerAgent:
             self._reject(trace_id, task_id,
                          f"dsh 退出码 {result['exit_code']}：{tail or '（无输出）'}")
             return
+        # Batch35：产物在别的机器上，平台看不见。回执里带一份全文（截到 8000 字），
+        # 平台收到后按本机口径补一份副本，产物签与抽屉三处都不用改。
+        art_text, art_truncated = _read_artifact_text(self.work_dir, result.get("artifact"))
         self._return(trace_id, task_id, {
             "output": {
                 "adapter": "dsh",
@@ -517,6 +542,9 @@ class WorkerAgent:
                 "artifact_bytes": result.get("artifact_bytes"),
                 "artifact_sha256": result.get("artifact_sha256"),
                 "artifact_error": result.get("artifact_error") or "",
+                "artifact_text": art_text,
+                "artifact_truncated": art_truncated,
+                "artifact_instance": self.instance_id,
             },
             "logs": result["stdout"][-2000:],
             "metadata": {

@@ -1062,6 +1062,26 @@ def stage_static():
           'shutil.which("dsh")' in dsh_adapter_py and "import shutil" in dsh_adapter_py,
           "云主机上 dsh 是全局 npm 装的，只认 ~/.dsh/profiles 会白报找不到")
 
+    # 1.8b5 Batch35：产物随回执回传——执行方在别的机器上时，平台也要看得见产物。
+    # 红线守「回传范围有边界、超长要截、平台只补不覆盖、只在回执里落，且接口面不动」。
+    artifacts_py35 = read(os.path.join(ROOT, "app", "services", "artifacts.py"))
+    worker_py35 = read(os.path.join(ROOT, "worker", "agent_worker.py"))
+    check("Batch35 Worker 只回传 run/artifacts 下的产物（不把任意文件送上总线）",
+          'startswith("run/artifacts/")' in worker_py35 and '".." in rel' in worker_py35,
+          "回传范围没设边界，等于给 Worker 开了个读全盘的洞")
+    check("Batch35 超长截到 8000 字并标明截断",
+          "ARTIFACT_INLINE_MAX = 8000" in worker_py35 and "art_truncated" in worker_py35,
+          "整份产物塞进报文，大产物会把总线撑爆")
+    check("Batch35 平台补本机副本时不覆盖本机已有产物",
+          "def save(" in artifacts_py35
+          and "if lookup(tid):" in artifacts_py35
+          and "if os.path.exists(full):" in artifacts_py35,
+          "同机执行时 Worker 写的那份才是原始字节，不许被回传内容盖掉")
+    check("Batch35 只在 task_return 里落盘（且这个函数不许被挂上幂等装饰器）",
+          "_persist_remote_artifact(envelope.task_id, payload)" in dispatch_py34
+          and "@_idempotent\ndef _persist_remote_artifact" not in dispatch_py34,
+          "落盘挂在错的位置，会拿 handler 的 envelope 当 payload 用")
+
     # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
 
     # 不许各处自己拼 "data/STOP"；worker 只读标记，不写、不删。

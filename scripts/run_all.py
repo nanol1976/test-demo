@@ -54,6 +54,7 @@ SCRIPTS = [
     ("Batch33 dsh 适配层：patch/key/env/退出码", "verify_b33.py"),
     ("Batch33-2 产物留档 + 思考档：落盘/哈希/接口", "verify_b33_2.py"),
 ("Batch34 dsh 挂岗位：并发配额 + 审计留痕", "verify_b34.py"),
+    ("Batch35 产物随回执回传：跨机可见/不覆盖/任务号安全", "verify_b35.py"),
 ]
 
 
