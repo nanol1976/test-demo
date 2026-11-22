@@ -21,6 +21,7 @@
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 import time
 
@@ -298,9 +299,14 @@ def resolve_command() -> list:
         return [cmd]
     node_bin = os.path.join(user_dsh_home(), "profiles", "node_modules",
                             "@deepseek-ai", "dsh", "lib", "bin.js")
-    if not os.path.isfile(node_bin):
-        raise DshError(f"找不到 dsh：{node_bin}（可设 MWP_DSH_CMD 指定）")
-    return ["node", node_bin]
+    if os.path.isfile(node_bin):
+        return ["node", node_bin]
+    # Batch34：Linux 上 dsh 通常是全局 npm 装的（~/.npm-global/bin/dsh 之类），
+    # 不在 ~/.dsh/profiles/node_modules 里；PATH 上能找到就直接用，别逼人事先设 MWP_DSH_CMD。
+    which = shutil.which("dsh")
+    if which:
+        return [which]
+    raise DshError(f"找不到 dsh：{node_bin} 和 PATH 上都没有（可设 MWP_DSH_CMD 指定）")
 
 
 def build_command(goal: str, patch_path: str = None, profile: str = "headless") -> list:

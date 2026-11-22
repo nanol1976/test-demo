@@ -1058,6 +1058,9 @@ def stage_static():
     check("Batch34 配额/审计不新增接口路径（铁律仍 11 条）",
           not os.path.isfile(os.path.join(ROOT, "app", "api", "routes_quota.py")),
           "为了查配额又开一条路径，等于偷偷扩接口面")
+    check("Batch34 Linux 上 PATH 里的 dsh 能自动找到（只有 Windows 认 APPDATA 等于漏了一半机器）",
+          'shutil.which("dsh")' in dsh_adapter_py and "import shutil" in dsh_adapter_py,
+          "云主机上 dsh 是全局 npm 装的，只认 ~/.dsh/profiles 会白报找不到")
 
     # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
 

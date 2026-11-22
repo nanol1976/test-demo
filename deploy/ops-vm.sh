@@ -45,7 +45,13 @@ PY="${MWP_PYTHON:-$(command -v python3 || true)}"
 # dsh 的运行 home 收进仓库（与适配层一致），绝不写用户的 ~/.dsh
 export DSH_HOME="${MWP_DSH_HOME:-$MWP_REPO/run/dsh_home}"
 
-echo "[run] instance=$INSTANCE role=$ROLE concurrency=$CONC dsh_home=$DSH_HOME"
+# 云主机上凭证放在仓库里（run/ 已 gitignore）：没显式指定就默认用它，省一步手配
+if [ -z "${MWP_DSH_CREDENTIALS:-}" ] && [ -f "$MWP_REPO/run/dsh_cred.yaml" ]; then
+  export MWP_DSH_CREDENTIALS="$MWP_REPO/run/dsh_cred.yaml"
+fi
+
+# 命令不用额外指定：适配层在 Linux 上会退到 PATH 里的 dsh（全局 npm 装的那个）
+echo "[run] instance=$INSTANCE role=$ROLE concurrency=$CONC dsh_home=$DSH_HOME cred=${MWP_DSH_CREDENTIALS:-（用户 ~/.dsh）}"
 exec "$PY" "$MWP_REPO/worker/agent_worker.py" \
   --base-url "$MWP_BASE_URL" \
   --worker-id "${MWP_WORKER_ID:-workbuddy}" \

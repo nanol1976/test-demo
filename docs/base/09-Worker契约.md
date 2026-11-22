@@ -131,6 +131,7 @@ POST /api/messages                                    # 报活 / 交活 / 报做
   - deny：同上再加拒因（没岗位 / 超配额）
   事后要能回答"这单为什么被放行、那单为什么被拒"，而不是只有一句报错。
 - **流水线照旧**：dsh 单跟其他单一同进流水线、回传落「待验收」、由签收推进到「验收通过」；配额与审计都不新增接口路径（接口面仍 11 条）。
+- **命令从哪来**：Windows 认 `%APPDATA%\npm\dsh.cmd`；Linux/macOS 先认 `~/.dsh/profiles/node_modules/.../bin.js`，找不到就退到 PATH 上的 `dsh`（云主机就是全局 npm 装的），都不行才报错——不逼每台机器都先设 `MWP_DSH_CMD`。
 
 ## 二、报文格式（与 Master 同协议）
 

@@ -48,6 +48,12 @@ def main():
           str(dsp.dsh_max_inflight()))
     os.environ.pop("MWP_DSH_MAX_INFLIGHT", None)
 
+    # 云主机上的实测教训：Linux 的 dsh 是全局 npm 装的，不在 ~/.dsh/profiles/node_modules 里
+    adapter_src = read(os.path.join(ROOT, "worker", "dsh_adapter.py"))
+    check("Linux 上 PATH 里的 dsh 能自动找到（不逼人先设 MWP_DSH_CMD）",
+          'shutil.which("dsh")' in adapter_src and "import shutil" in adapter_src,
+          "只认 ~/.dsh/profiles/node_modules，全局 npm 装的机器会白报找不到")
+
     print("\n=== 2) 只拦 dsh 单 ===")
     check("adapter=dsh 认得出", dsp._resolve_adapter({"exec": {"adapter": "dsh"}}) == "dsh")
     check("大小写与空白都归一", dsp._resolve_adapter({"exec": {"adapter": "  DSH "}}) == "dsh")
