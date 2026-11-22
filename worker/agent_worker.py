@@ -480,13 +480,15 @@ class WorkerAgent:
         timeout = float(spec.get("timeout_seconds") or self.max_task_seconds)
         timeout = min(timeout, self.max_task_seconds)
         log("adapter_start", task_id=task_id, adapter=name, timeout_s=timeout,
-            model=spec.get("model") or None)
+            model=spec.get("model") or None, effort=spec.get("reasoning_effort") or None)
         hb = Heartbeat(self.client, trace_id, task_id, self.worker_id,
                        self.heartbeat_interval, "dsh headless 执行中")
         hb.start()
         try:
             result = dsh_adapter.run(str(goal), timeout=timeout, cwd=self.work_dir,
-                                     model=spec.get("model"))
+                                     model=spec.get("model"),
+                                     effort=spec.get("reasoning_effort"),
+                                     task_id=task_id)
         except dsh_adapter.DshError as exc:
             self._reject(trace_id, task_id, f"adapter=dsh 起不来：{exc}")
             return
@@ -506,11 +508,16 @@ class WorkerAgent:
                 "exit_code": result["exit_code"],
                 "duration_ms": result["duration_ms"],
                 "model": result["model"],
+                "reasoning_effort": result.get("effort") or "",
+                "artifact": result.get("artifact"),
+                "artifact_bytes": result.get("artifact_bytes"),
+                "artifact_sha256": result.get("artifact_sha256"),
+                "artifact_error": result.get("artifact_error") or "",
             },
             "logs": result["stdout"][-2000:],
             "metadata": {
-                "self_check": "dsh headless 正常退出（退出码 0）；stdout 即产出",
-                "known_issues": "",
+                "self_check": "dsh headless 正常退出（退出码 0）；stdout 即产出，全文见产物文件",
+                "known_issues": result.get("artifact_error") or "",
                 "heartbeats": hb.sent,
                 "worker_id": self.worker_id,
                 "instance_id": self.instance_id,

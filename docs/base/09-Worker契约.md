@@ -77,6 +77,7 @@ POST /api/messages                                    # 报活 / 交活 / 报做
 | `adapter` | string | 必填，目前只认 `dsh`；写别的值 → `task_reject`「不认识的 adapter：…」 |
 | `timeout_seconds` | number | 可选，同样只能比 Worker 全局上限更短 |
 | `model` | string | 可选，按单指定模型（Batch33-1）。不填就看环境变量 `MWP_DSH_MODEL`，再没有就用仓库 patch 里的默认 |
+| `reasoning_effort` | string | 可选，思考档（Batch33-2），只认 `minimal` / `low` / `medium` / `high`；不填就看 `MWP_DSH_EFFORT`，再没有就不写这一行（用 dsh 自己的默认） |
 | `script` / `args` | — | adapter 单里不填；填了也不看 |
 
 `model` 的取值顺序：**`exec.model` > `MWP_DSH_MODEL` > 仓库 patch 默认 `nvidia/nemotron-3.5-lightning-30b-a3b`**。名字只允许 `A-Za-z0-9._:@/-`，不许出现 `..` 或空格，否则整单直接拒（不合法就不跑，不猜）。
@@ -90,8 +91,25 @@ POST /api/messages                                    # 报活 / 交活 / 报做
 - key 从 `~/.dsh/.credentials.yaml` 的 `refs.NVIDIA_API_KEY` 读出（`MWP_DSH_CREDENTIALS` 可指向别处），**只塞进子进程 env**，不落仓库、不进台账。找不到 key → 直接拒单，理由写明找的是哪一段。
 - 判定只看退出码：`0` 即成功，**stdout 就是产出**（进回执 `logs`），非零即拒单并把 stderr（或 stdout 末 400 字）带进理由。
 - 注意 dsh 的推理过程写在 **stderr**（前缀 `dsh: reasoning:`），答案才在 stdout，所以 `logs` 只取 stdout 是对的，stderr 留给拒单理由。
-- 回执 `payload.output` 带 `{adapter, exit_code, duration_ms, model}`，方便一眼看出这单是谁跑的、跑了多久、用的哪个模型。
+- 回执 `payload.output` 带 `{adapter, exit_code, duration_ms, model, reasoning_effort, artifact, artifact_bytes, artifact_sha256, artifact_error}`，方便一眼看出这单是谁跑的、跑了多久、用的哪个模型和哪档思考、产出存在哪。
 - 已知：dsh 是完整 agent，会自己去读目录里的文件，耗时可能远超单纯问答（实测一次 3+3 让它读了仓库，95s、18 次心跳）。要它「只回答、别用工具」得在 `task_goal` 里写清楚。
+
+### 一·补四 产物留档与思考档（Batch33-2）
+
+前两批的产出只活在回执 `logs`（且截到 2000 字）里，任务一结就查不到干了什么。这一批把它落到文件上：
+
+- **每次执行都写一份 `run/artifacts/<task_id>.log`**（相对仓库根）：开头六行是头（`# task_id` / `# model` / `# reasoning_effort` / `# exit_code` / `# duration_ms` / `# patch`），然后 `=== stdout ===`、`=== stderr ===` 两段全文。推理过程留在 stderr 段里，产出在 stdout 段里，跟 dsh 的分流口径一致。
+- 回执里带 `artifact`（相对路径）、`artifact_bytes`、`artifact_sha256`（前 12 位）。**字节数与哈希按落盘后的真实字节算**——Windows 会把换行写成 CRLF，按内存里的文本算必然对不上。
+- 写不进去（磁盘满、被安全软件拦）**不影响这一单的结论**：`artifact` 置 `null`，`artifact_error` 写清原因，`metadata.known_issues` 同步带上。不让留档失败把一单正常的活判成失败，也不假装写成功了。
+- 任务号当文件名用，先按白名单洗：只留 `A-Za-z0-9._-`，连续的 `.` 一律换成 `_`，开头不许是点。所以 `../../evil` 会变成 `____evil.log`，产物永远落在 `run/artifacts` 里。
+- **平台不加接口路径**（接口面铁律仍是 11 条）：`app/services/artifacts.py` 把本机能看到的 `run/artifacts` 扫成一张 `{task_id: {path, bytes}}` 索引（按目录 mtime 缓存，不每刷一次全盘 stat），挂到 `TaskView` 的 `artifact` / `artifact_bytes` / `artifact_error` 三个字段上——跟 Batch32-1 加复核三字段是同一个做法：**路径不动，返回体变厚**。
+- 看板在 task_id 后面加一枚「产物 N KB」小签：只有平台**本机**真能看到文件才出现，鼠标悬停显示相对路径；Worker 写档失败则标一枚黄的「产物未留档」，悬停显示原因。点开全文要扩接口面，本批没做——想看全文就登录跑这一单的那台机器直接打开 `run/artifacts/<task_id>.log`（回执 `logs` 里还有 stdout 末 2000 字）。
+
+思考档：
+
+- `exec.reasoning_effort` 只认 `minimal` / `low` / `medium` / `high`，写进渲染 patch 的 `agent-default-model.config.reasoningEffort`（跟 `provider` / `model` 平级的那一行），**只写一处**，不碰 `llm-pi-ai` 的 `models` 列表。
+- 不指定就不写这一行——仓库 patch 里本来没有 `reasoningEffort`，不替别的调用方定档。
+- 优先级：**`exec.reasoning_effort` > `MWP_DSH_EFFORT` > 不写**。缓存文件名带档位（`patch-<模型>-<档位>.yml`），同一组合复用，7 天没动过照样被 `prune_cache` 清掉。
 
 ## 二、报文格式（与 Master 同协议）
 

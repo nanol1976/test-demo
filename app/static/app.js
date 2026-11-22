@@ -416,6 +416,35 @@ function renderDetail(p) {
   wrap.scrollTop = prevScroll;
 }
 
+/* Batch33-2：产物留档的自检签。看板**不新增接口**（接口面仍 11 条）：
+   平台把本机能看到的 run/artifacts 索引挂在 TaskView 上，这里只显示「有没有、多大、在哪」。
+   全文就留在磁盘上，在机器上打开即可；写档失败单独标一枚黄签，别让人以为留档成功。 */
+function fmtBytes(n) {
+  const v = Number(n) || 0;
+  if (v < 1024) return `${v} B`;
+  if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`;
+  return `${(v / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function renderArtifactChip(td, t) {
+  let chip = td.querySelector(".art-chip");
+  if (!t.artifact && !t.artifact_error) { if (chip) chip.remove(); return; }
+  if (!chip) {
+    chip = document.createElement("span");
+    chip.className = "art-chip";
+    td.appendChild(chip);
+  }
+  if (t.artifact) {
+    chip.className = "art-chip";
+    chip.textContent = `产物 ${fmtBytes(t.artifact_bytes)}`;
+    chip.title = t.artifact;
+  } else {
+    chip.className = "art-chip art-chip-warn";
+    chip.textContent = "产物未留档";
+    chip.title = t.artifact_error || "Worker 没有写产物文件";
+  }
+}
+
 function buildTaskRow(t) {
   const row = document.createElement("tr");
   row.dataset.task = t.task_id;
@@ -482,6 +511,12 @@ function updateTaskRow(rec, t) {
   }
   const reason = t.abort_reason || t.reject_reason || "—";
   if (rec.last.reason !== reason) { rec.last.reason = reason; setCellText(rec.cells.reason, reason); }
+  // Batch33-2：产物签——平台只看本机能看到的 run/artifacts，看不到就不出现
+  const artKey = `${t.artifact || ""}|${t.artifact_bytes || 0}|${t.artifact_error || ""}`;
+  if (rec.last.art !== artKey) {
+    rec.last.art = artKey;
+    renderArtifactChip(rec.cells.id, t);
+  }
 }
 
 /* ---------- 执行方在线视图（Batch12）
@@ -1409,3 +1444,4 @@ loadWorkers();
 loadAudit();
 loadPipelines();
 setAutoRefresh(localStorage.getItem(AUTO_KEY) || 0);
+

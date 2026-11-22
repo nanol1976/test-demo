@@ -966,6 +966,47 @@ def stage_static():
           and "except OSError" in dsh_adapter_py,
           "缓存没有清理口，或清理会把别的文件一起带走")
 
+    # 1.8o Batch33-2：产物留档 + 思考档。产出不能只活在回执里；任务号不许把文件带出目录。
+    artifacts_svc_py = read(os.path.join(ROOT, "app", "services", "artifacts.py"))
+    app_js33_2 = read(os.path.join(ROOT, "app", "static", "app.js"))
+    check("Batch33-2 每次执行都落一份产物文件（run/artifacts/<task_id>.log）",
+          "def write_artifact" in dsh_adapter_py and '"artifacts"' in dsh_adapter_py
+          and "write_artifact(task_id" in dsh_adapter_py,
+          "产物只在回执里，任务一结束就查不到")
+    check("Batch33-2 产物字节与哈希按落盘后的真实字节算",
+          'with open(full, "rb") as fh' in dsh_adapter_py
+          and "artifact_sha256" in dsh_adapter_py,
+          "按内存文本算哈希，Windows 换行一改就对不上")
+    check("Batch33-2 任务号不许把产物带出目录（连点一律洗掉）",
+          're.sub(r"\\.{2,}"' in dsh_adapter_py and "lstrip" in dsh_adapter_py,
+          ".. 能穿过目录，产物会写到 run/artifacts 之外")
+    check("Batch33-2 思考档有白名单（minimal/low/medium/high）",
+          "EFFORT_VALUES" in dsh_adapter_py and "def check_effort" in dsh_adapter_py,
+          "思考档不校验就会被当自由文本写进 yml")
+    check("Batch33-2 思考档写在 agent-default-model 段（只一处）",
+          "reasoningEffort:" in dsh_adapter_py and "anchor" in dsh_adapter_py,
+          "写错段位会让 provider 配置也跟着变")
+    check("Batch33-2 Worker 把 task_id 与 effort 都传下去",
+          "task_id=task_id" in worker_py33 and 'effort=spec.get("reasoning_effort")' in worker_py33,
+          "产物没有任务号就分不清是谁的，思考档也传不进去")
+    check("Batch33-2 平台产物索引只认 run/artifacts 下的 .log（按目录 mtime 缓存）",
+          "def scan" in artifacts_svc_py and 'endswith(".log")' in artifacts_svc_py
+          and "_dir_key" in artifacts_svc_py,
+          "每刷一次台板就全盘 stat，或把别的文件也当产物")
+    check("Batch33-2 产物挂在 TaskView 上、不加接口路径（铁律仍 11 条）",
+          "artifact_bytes" in read(os.path.join(ROOT, "app", "api", "schemas_http.py"))
+          and not os.path.isfile(os.path.join(ROOT, "app", "api", "routes_artifacts.py")),
+          "为产物开了新路径，就要先改接口面红线并征得同意")
+    check("Batch33-2 看不到产物就不写路径（不编）",
+          'art.get("path") or None' in read(os.path.join(ROOT, "app", "api", "routes_messages.py")),
+          "查不到就编，等于把台账当小说写")
+    check("Batch33-2 看板有产物签，且不为它发请求",
+          "renderArtifactChip" in app_js33_2 and "ROUTES.artifacts" not in app_js33_2,
+          "看板显示产物要么走新接口，要么干脆没有")
+    check("Batch33-2 exec.reasoning_effort 与产物字段写进 09 号契约",
+          "reasoning_effort" in dsh_doc09 and "artifact_sha256" in dsh_doc09,
+          "契约没写，下一个人只能靠猜")
+
     # 1.8c Batch29：优雅停止——停止标记是整机级的，只允许一个实现，
 
     # 不许各处自己拼 "data/STOP"；worker 只读标记，不写、不删。

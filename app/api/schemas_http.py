@@ -38,6 +38,12 @@ class TaskView(BaseModel):
     review_verdict: Optional[str] = None
     # review_items：逐项结论（原文 JSON 解析后的数组）
     review_items: List[Dict[str, Any]] = Field(default_factory=list)
+    # Batch33-2：产物留档（字段不是路径——接口仍是 11 条，只是返回体多三个字段）
+    # artifact：本机能看到的产物相对路径（看不到就是 None，不编路径）
+    artifact: Optional[str] = None
+    artifact_bytes: Optional[int] = None
+    # artifact_error：Worker 写档失败时的原因（写不进去不影响这一单的结论）
+    artifact_error: Optional[str] = None
 
 
 class PipelineView(BaseModel):

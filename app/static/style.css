@@ -425,3 +425,47 @@ textarea {
   background: #fff;
   vertical-align: 1px;
 }
+/* Batch33-2：产物留档。小签贴着 task_id，点开在表下贴全文（不新开窗口，免得口令进 URL）。 */
+.art-chip {
+  margin-left: 6px;
+  font-size: 11px;
+  padding: 1px 5px;
+  border: 1px solid #c8d0da;
+  border-radius: 2px;
+  color: #2f5f8f;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.art-chip:hover { background: #eef3f8; }
+.artifact-box {
+  margin-top: 10px;
+  border: 1px solid #d7dce2;
+  border-radius: 2px;
+  background: #fbfcfd;
+}
+.artifact-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid #e3e7ec;
+  font-size: 12px;
+}
+.artifact-body {
+  margin: 0;
+  padding: 10px;
+  max-height: 420px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.btn-mini {
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid #c8d0da;
+  border-radius: 2px;
+  background: #fff;
+  cursor: pointer;
+}
+.art-chip-warn { color: #9a6a00; border-color: #e0c68a; background: #fdf8ea; }

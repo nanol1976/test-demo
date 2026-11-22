@@ -23,6 +23,7 @@ from app.models import MessageArchive
 from app.repositories.ledger import LedgerRepository
 from app.schemas import Envelope
 from app.services import ArchiveService
+from app.services import artifacts
 from app.services.dispatch import IllegalTransitionError, TaskNotFoundError, register_all
 
 logger = get_logger(__name__)
@@ -94,6 +95,13 @@ def _review_items(task) -> list:
 
 
 def _task_view(task) -> TaskView:
+    art = artifacts.lookup(task.task_id)
+    payload = _task_payload(task)
+    art_error = ""
+    if isinstance(payload, dict):
+        output = payload.get("output")
+        if isinstance(output, dict):
+            art_error = str(output.get("artifact_error") or "")
     return TaskView(
         task_id=task.task_id,
         trace_id=task.trace_id,
@@ -115,6 +123,10 @@ def _task_view(task) -> TaskView:
         review_of=getattr(task, "review_of", None),
         review_verdict=getattr(task, "review_verdict", None),
         review_items=_review_items(task),
+        # Batch33-2：只报本机能看到的产物；看不到就是 None（不编路径、不猜大小）
+        artifact=art.get("path") or None,
+        artifact_bytes=art.get("bytes"),
+        artifact_error=art_error or None,
     )
 
 
